@@ -804,7 +804,7 @@ class CheckoutManager {
             try { document.body.style.overflow = 'auto'; } catch (e) {}
             try { document.body.classList.remove('order-confirmation-open'); } catch (e) {}
             if (redirectToTracking) {
-                window.location.href = `order-tracking.html?orderId=${encodeURIComponent(order.orderId)}`;
+                window.location.href = `/order-tracking/?orderId=${encodeURIComponent(order.orderId)}`;
             }
         }
 

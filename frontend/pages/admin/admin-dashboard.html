@@ -1,9 +1,9 @@
-<!DOCTYPE html>
+{% load static %}<!DOCTYPE html>
 <html lang="en">
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <link rel="icon" href="assets/logo.png" type="image/png">
+    <link rel="icon" href="{% static 'images/logo.png' %}" type="image/png">
     <title>Admin Dashboard - CoffeeKaafiHai</title>
     
     <!-- Bootstrap CSS -->
@@ -1014,7 +1014,7 @@
         function checkAdminAuth() {
             const isAdmin = localStorage.getItem('isAdmin') === 'true';
             if (!isAdmin) {
-                window.location.href = 'admin-login.html';
+                window.location.href = "{% url 'admin_login' %}";
             }
         }
 
@@ -1024,7 +1024,7 @@
             localStorage.removeItem('adminToken');
             showToast('Logged out successfully', 'info');
             setTimeout(() => {
-                window.location.href = 'admin-login.html';
+                window.location.href = "{% url 'admin_login' %}";
             }, 1000);
         }
 

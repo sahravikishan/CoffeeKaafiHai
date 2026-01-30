@@ -1,11 +1,11 @@
-<!DOCTYPE html>
+{% load static %}<!DOCTYPE html>
 <html lang="en">
 
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <meta name="csrf-token" content="">
-    <link rel="icon" href="logo.png" type="image/png">
+    <link rel="icon" href="{% static 'images/logo.png' %}" type="image/png">
     <title>Sign Up - CoffeeKaafiHai</title>
     
     <!-- Bootstrap CSS -->
@@ -20,7 +20,7 @@
     <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.5.1/css/all.min.css">
     
     <!-- Auth API Integration -->
-    <script src="../../js/auth-api-integration.js"></script>
+    <script src="{% static 'js/auth-api-integration.js' %}"></script>
     
     <style>
         :root {
@@ -555,7 +555,7 @@
 
 <body>
     <div class="back-home">
-        <a href="index.html">
+        <a href="{% url 'home' %}">
             <i class="fas fa-arrow-left"></i>
             Home
         </a>
@@ -573,7 +573,7 @@
     <div class="auth-container">
         <div class="auth-card">
             <div class="auth-logo">
-                <img src="logo.png" alt="CoffeeKaafiHai Logo">
+                <img src="{% static 'images/logo.png' %}" alt="CoffeeKaafiHai Logo">
                 <h2>Create Account</h2>
                 <p>Join the CoffeeKaafiHai family today</p>
             </div>
@@ -651,7 +651,7 @@
                 <div class="form-check mb-3">
                     <input class="form-check-input" type="checkbox" id="terms" required>
                     <label class="form-check-label" for="terms">
-                        I agree to the <a href="#" onclick="openTermsOrPrivacy('terms-conditions.html'); return false;">Terms & Conditions</a> and <a href="#" onclick="openTermsOrPrivacy('privacy-policy.html'); return false;">Privacy Policy</a>
+                        I agree to the <a href="#" onclick="openTermsOrPrivacy('{% url 'terms_conditions' %}'); return false;">Terms & Conditions</a> and <a href="#" onclick="openTermsOrPrivacy('{% url 'privacy_policy' %}'); return false;">Privacy Policy</a>
                     </label>
                     <div class="invalid-feedback">You must agree to the terms and conditions.</div>
                 </div>
@@ -669,7 +669,7 @@
             </div>
             
             <div class="auth-links">
-                <p class="mb-0">Already have an account? <a href="login.html">Login here</a></p>
+                <p class="mb-0">Already have an account? <a href="{% url 'login' %}">Login here</a></p>
             </div>
         </div>
     </div>

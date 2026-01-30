@@ -1,10 +1,10 @@
-<!DOCTYPE html>
+{% load static %}<!DOCTYPE html>
 <html lang="en">
 
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <link rel="icon" href="logo.png" type="image/png">
+    <link rel="icon" href="{% static 'images/logo.png' %}" type="image/png">
     <title>Admin Registration - CoffeeKaafiHai</title>
     
     <!-- Bootstrap CSS -->
@@ -568,7 +568,7 @@
 
 <body>
     <div class="back-home">
-        <a href="admin-login.html">
+        <a href="{% url 'admin_login' %}">
             <i class="fas fa-arrow-left"></i>
             Back
         </a>
@@ -586,7 +586,7 @@
     <div class="auth-container">
         <div class="auth-card">
             <div class="auth-logo">
-                <img src="logo.png" alt="CoffeeKaafiHai Logo">
+                <img src="{% static 'images/logo.png' %}" alt="CoffeeKaafiHai Logo">
                 <div class="admin-badge">
                     <i class="fas fa-shield-alt"></i> ADMIN REGISTRATION
                 </div>
@@ -731,7 +731,7 @@
             </div>
             
             <div class="auth-links">
-                <p class="mb-0" style="color: #999;">Already have an account? <a href="admin-login.html">Login here</a></p>
+                <p class="mb-0" style="color: #999;">Already have an account? <a href="{% url 'admin_login' %}">Login here</a></p>
             </div>
         </div>
     </div>
@@ -1033,7 +1033,7 @@
                 showToast('Registration successful! Redirecting to login...', 'success');
                 
                 setTimeout(() => {
-                    window.location.href = 'admin-login.html';
+                    window.location.href = "{% url 'admin_login' %}";
                 }, 2000);
             }, 1500);
         });

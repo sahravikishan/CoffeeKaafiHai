@@ -3,25 +3,61 @@ Template rendering views for serving HTML pages.
 These views handle rendering frontend templates without adding business logic.
 """
 
-from django.shortcuts import render
+from django.shortcuts import render, redirect
 from django.http import JsonResponse
-from database.models import Order, Payment
+from database.models import User, Order, Payment
+from django.views.decorators.csrf import ensure_csrf_cookie
 
 
 # ==========================================
 # PUBLIC PAGES
 # ==========================================
 
+@ensure_csrf_cookie
 def index(request):
-    """Render main landing/home page"""
-    return render(request, 'pages/public/index.html')
+    """
+    Render main landing/home page.
+    Fetches user data from MongoDB if user is authenticated.
+    If user is authenticated, still show home page but client-side JS will redirect to profile if needed.
+    """
+    context = {
+        'is_authenticated': False,
+        'user': None,
+        'user_orders': []
+    }
+    
+    try:
+        # Check session first (most reliable authentication indicator)
+        user_email = request.session.get('email')
+
+        if user_email:
+            user = User.find_by_email(user_email)
+            if user:
+                context['is_authenticated'] = True
+                context['user'] = {
+                    'email': user.get('email'),
+                    'firstName': user.get('firstName', ''),
+                    'lastName': user.get('lastName', ''),
+                    'phone': user.get('phone', ''),
+                }
+                # Fetch user's recent orders (limit to 5)
+                orders = Order.get_by_email(user_email)
+                context['user_orders'] = orders[:5] if orders else []
+    except Exception as e:
+        # Handle MongoDB connection or query failures gracefully
+        print(f"Error fetching user data for home page: {e}")
+        context['is_authenticated'] = False
+    
+    return render(request, 'pages/public/index.html', context)
 
 
+@ensure_csrf_cookie
 def privacy_policy(request):
     """Render privacy policy page"""
     return render(request, 'pages/public/privacy-policy.html')
 
 
+@ensure_csrf_cookie
 def terms_and_conditions(request):
     """Render terms and conditions page"""
     return render(request, 'pages/public/terms-conditions.html')
@@ -31,54 +67,85 @@ def terms_and_conditions(request):
 # CUSTOMER PAGES
 # ==========================================
 
+@ensure_csrf_cookie
 def login(request):
     """Render customer login page"""
     return render(request, 'pages/customer/login.html')
 
 
+@ensure_csrf_cookie
 def signup(request):
     """Render customer signup page"""
     return render(request, 'pages/customer/signup.html')
 
 
+@ensure_csrf_cookie
 def forgot_password(request):
     """Render forgot password page"""
     return render(request, 'pages/customer/forgot-password.html')
 
 
+@ensure_csrf_cookie
 def reset_password(request):
     """Render reset password page"""
     return render(request, 'pages/customer/reset-password.html')
 
 
+@ensure_csrf_cookie
 def customer_profile(request):
-    """Render customer profile page with user data"""
-    context = {}
+    """
+    Render customer profile page with user data.
+    Redirects to login if user is not authenticated via session.
+    """
+    context = {
+        'is_authenticated': False,
+        'user': None,
+        'orders': []
+    }
+    
     try:
-        # Get email from session or request parameter
-        email = request.session.get('email') or request.GET.get('email')
-        if email:
-            # Fetch user orders from MongoDB
-            orders = Order.get_by_email(email)
-            context['orders'] = orders
-            context['email'] = email
+        # Require authenticated session - redirect to login if not authenticated
+        email = request.session.get('email')
+        if not email:
+            return redirect('login')
+
+        # Fetch user from MongoDB
+        user = User.find_by_email(email)
+        if not user:
+            return redirect('login')
+        
+        context['is_authenticated'] = True
+        context['user'] = {
+            'email': user.get('email'),
+            'firstName': user.get('firstName', ''),
+            'lastName': user.get('lastName', ''),
+            'phone': user.get('phone', ''),
+        }
+        
+        # Fetch user orders from MongoDB
+        orders = Order.get_by_email(email)
+        context['orders'] = orders if orders else []
     except Exception as e:
         print(f"Error fetching profile data: {e}")
+        return redirect('login')
     
     return render(request, 'pages/customer/profile.html', context)
 
 
+@ensure_csrf_cookie
 def order_tracking(request):
     """Render order tracking page with orders data"""
     context = {}
     try:
-        # Get email from session or request parameter
-        email = request.session.get('email') or request.GET.get('email')
-        if email:
-            # Fetch user orders from MongoDB
-            orders = Order.get_by_email(email)
-            context['orders'] = orders
-            context['email'] = email
+        # Require authenticated session
+        email = request.session.get('email')
+        if not email:
+            return redirect('login')
+
+        # Fetch user orders from MongoDB
+        orders = Order.get_by_email(email)
+        context['orders'] = orders
+        context['email'] = email
     except Exception as e:
         print(f"Error fetching orders: {e}")
     
@@ -89,26 +156,31 @@ def order_tracking(request):
 # ADMIN PAGES
 # ==========================================
 
+@ensure_csrf_cookie
 def admin_login(request):
     """Render admin login page"""
     return render(request, 'pages/admin/admin-login.html')
 
 
+@ensure_csrf_cookie
 def admin_signup(request):
     """Render admin signup page"""
     return render(request, 'pages/admin/admin-signup.html')
 
 
+@ensure_csrf_cookie
 def admin_forgot_password(request):
     """Render admin forgot password page"""
     return render(request, 'pages/admin/admin-forgot-password.html')
 
 
+@ensure_csrf_cookie
 def admin_reset_password(request):
     """Render admin reset password page"""
     return render(request, 'pages/admin/admin-reset-password.html')
 
 
+@ensure_csrf_cookie
 def admin_dashboard(request):
     """Render admin dashboard page with admin data"""
     context = {}

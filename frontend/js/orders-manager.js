@@ -293,6 +293,8 @@ function saveCoffeePreferences() {
     const milkPref = document.getElementById('milkPref')?.value || "Regular Milk";
     const sugarLevel = document.getElementById('sugarLevel')?.value || "Regular";
     const cupSize = document.getElementById('cupSize')?.value || "Medium";
+    const temperature = document.getElementById('temperature')?.value || "Hot";
+    const coffeeStrength = document.getElementById('coffeeStrength')?.value || "Regular";
     const emailNotif = document.getElementById('emailNotif')?.checked || false;
     const smsNotif = document.getElementById('smsNotif')?.checked || false;
     
@@ -301,6 +303,8 @@ function saveCoffeePreferences() {
         milkPref,
         sugarLevel,
         cupSize,
+        temperature,
+        coffeeStrength,
         emailNotif,
         smsNotif
     };
@@ -510,7 +514,7 @@ function displayRecentOrders(limit) {
                 </div>
                 <div class="order-total">Total: ₹${totalAmount}</div>
                 <div style="margin-top:12px;display:flex;gap:10px;flex-wrap:wrap">
-                    <a href="order-tracking.html?orderId=${encodeURIComponent(order.orderId || order.id || '')}" class="btn btn-sm" style="background:linear-gradient(135deg,#6f4e37,#8b5e3c);color:#fff;border-radius:12px;padding:8px 14px;text-decoration:none">&nbsp;<i class="fas fa-route"></i>&nbsp;Track</a>
+                    <a href="/order-tracking/?orderId=${encodeURIComponent(order.orderId || order.id || '')}" class="btn btn-sm" style="background:linear-gradient(135deg,#6f4e37,#8b5e3c);color:#fff;border-radius:12px;padding:8px 14px;text-decoration:none">&nbsp;<i class="fas fa-route"></i>&nbsp;Track</a>
                     ${canCancel ? `<button class="btn btn-sm btn-danger profile-cancel-order" data-order-id="${order.orderId || order.id || ''}" style="padding:8px 14px;border-radius:12px">&nbsp;<i class="fas fa-times-circle"></i>&nbsp;Cancel</button>` : ''}
                 </div>
             </div>
@@ -970,7 +974,7 @@ function removeAvatar() {
  */
 async function loadLogoBase64() {
     try {
-        const resp = await fetch('logo.png');
+        const resp = await fetch("{% static 'images/logo.png' %}");
         if (!resp.ok) {
             console.warn('Logo fetch failed:', resp.status);
             return;
@@ -1247,7 +1251,7 @@ async function generateUserDataPDF(startDate = null, endDate = null) {
             doc.setFont('helvetica', 'italic');
             doc.setFontSize(8);
             doc.setTextColor(120, 120, 120);
-            doc.text(`Page: ${i  } 'Where Every Sip Tells a Story'`, pageWidth / 2, 292, { align: 'center' });
+            doc.text(`Page ${i} - Where Every Sip Tells a Story`, pageWidth / 2, 292, { align: 'center' });
         }
 
         const fileName = `CoffeeKaafiHai_UserData_${Date.now()}.pdf`;
@@ -1863,7 +1867,7 @@ function setupLogoutHandlers() {
             closeModal('logoutModal');
             showToast('Logged out. Redirecting to home page', 'info');
             setTimeout(function() {
-                window.location.href = 'index.html';
+                window.location.href = '/';
             }, 700);
         });
     }
@@ -1887,7 +1891,7 @@ function setupDeleteAccountHandlers() {
             localStorage.clear();
             showToast('Account deleted. Redirecting to home page...', 'warning');
             setTimeout(function() {
-                window.location.href = 'index.html';
+                window.location.href = '/';
             }, 2500);
         });
     }
@@ -1948,42 +1952,40 @@ function setupModalHandlers() {
  * Initialize orders manager on load
  */
 function initOrdersManager() {
-    document.addEventListener('DOMContentLoaded', () => {
-        // Initialize profile
-        initializeUserProfile();
-        updateProfileDisplay();
+    // Initialize profile
+    initializeUserProfile();
+    updateProfileDisplay();
 
-        // Render orders only for logged-in users
-        const isLoggedIn = localStorage.getItem('isLoggedIn') === 'true';
-        if (isLoggedIn) {
+    // Render orders only for logged-in users
+    const isLoggedIn = localStorage.getItem('isLoggedIn') === 'true';
+    if (isLoggedIn) {
+        displayRecentOrders(3);
+    } else {
+        const container = document.getElementById('recentOrdersContainer');
+        if (container) container.innerHTML = '';
+        updateProfileStats();
+    }
+
+    // React to order updates
+    window.addEventListener('ordersUpdated', () => {
+        displayRecentOrders(3);
+    });
+
+    // React to profile changes
+    window.addEventListener('profileUpdated', () => {
+        const logged = localStorage.getItem('isLoggedIn') === 'true';
+        if (logged) {
             displayRecentOrders(3);
         } else {
-            const container = document.getElementById('recentOrdersContainer');
-            if (container) container.innerHTML = '';
+            const c = document.getElementById('recentOrdersContainer');
+            if (c) c.innerHTML = '';
             updateProfileStats();
         }
-
-        // React to order updates
-        window.addEventListener('ordersUpdated', () => {
-            displayRecentOrders(3);
-        });
-
-        // React to profile changes
-        window.addEventListener('profileUpdated', () => {
-            const logged = localStorage.getItem('isLoggedIn') === 'true';
-            if (logged) {
-                displayRecentOrders(3);
-            } else {
-                const c = document.getElementById('recentOrdersContainer');
-                if (c) c.innerHTML = '';
-                updateProfileStats();
-            }
-        });
     });
 }
 
-// Initialize orders manager
-initOrdersManager();
+// Initialize orders manager on DOMContentLoaded
+document.addEventListener('DOMContentLoaded', initOrdersManager);
 
 /**
  * Main initialization on DOMContentLoaded
@@ -2009,8 +2011,8 @@ window.addEventListener("DOMContentLoaded", async () => {
     
     // Redirect to login if not logged in on profile page
     const isLoggedIn = localStorage.getItem('isLoggedIn') === 'true';
-    if (!isLoggedIn && location.href && location.href.indexOf('profile.html') !== -1) {
-        window.location.href = 'login.html';
+    if (!isLoggedIn && location.href && location.href.indexOf('/profile/') !== -1) {
+        window.location.href = '/login/';
         return;
     }
 

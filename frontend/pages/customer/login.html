@@ -1,11 +1,11 @@
-<!DOCTYPE html>
+{% load static %}<!DOCTYPE html>
 <html lang="en">
 
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <meta name="csrf-token" content="">
-    <link rel="icon" href="logo.png" type="image/png">
+    <link rel="icon" href="{% static 'images/logo.png' %}" type="image/png">
     <title>Login - CoffeeKaafiHai</title>
     
     <!-- Bootstrap CSS -->
@@ -20,7 +20,7 @@
     <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.5.1/css/all.min.css">
     
     <!-- Auth API Integration -->
-    <script src="../../js/auth-api-integration.js"></script>
+    <script src="{% static 'js/auth-api-integration.js' %}"></script>
     
     <style>
         :root {
@@ -593,7 +593,7 @@
 
 <body>
     <div class="back-home">
-        <a href="index.html">
+        <a href="{% url 'home' %}">
             <i class="fas fa-arrow-left"></i>
             Home
         </a>
@@ -611,7 +611,7 @@
     <div class="auth-container">
         <div class="auth-card">
             <div class="auth-logo">
-                <img src="logo.png" alt="CoffeeKaafiHai Logo">
+                <img src="{% static 'images/logo.png' %}" alt="CoffeeKaafiHai Logo">
                 <h2>Welcome Back</h2>
                 <p>Login to your CoffeeKaafiHai account</p>
             </div>
@@ -645,7 +645,7 @@
                             Remember me
                         </label>
                     </div>
-                    <a href="forgot-password.html" style="font-size: 0.95rem;">Forgot Password?</a>
+                    <a href="{% url 'forgot_password' %}" style="font-size: 0.95rem;">Forgot Password?</a>
                 </div>
                 
                 <button type="submit" class="btn-auth" id="loginBtn">
@@ -673,7 +673,7 @@
             
             <div class="auth-links">
                 <span style="color: #666;">Don't have an account?</span>
-                <a href="signup.html">Sign Up here</a>
+                <a href="{% url 'signup' %}">Sign Up here</a>
             </div>
         </div>
     </div>
