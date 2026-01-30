@@ -608,8 +608,13 @@
 
         // Initialize Google Maps
         function initializeMap(order) {
-            const mapElement = document.getElementById('map');
-            if (!mapElement || !window.google) return;
+            // Find the map element for this specific order
+            const mapElement = document.querySelector(`#map-${order.orderId}`);
+            
+            if (!mapElement || !window.google) {
+                console.warn(`Map element not found for order ${order.orderId} or Google Maps not loaded`);
+                return;
+            }
 
             // Parse delivery address to get coordinates (simplified - in production, use Geocoding API)
             const customerLocation = getCustomerLocation(order);
@@ -617,6 +622,17 @@
             // Initialize map centered between store and customer
             const centerLat = (STORE_LOCATION.lat + customerLocation.lat) / 2;
             const centerLng = (STORE_LOCATION.lng + customerLocation.lng) / 2;
+
+            // Reset map state to avoid conflicts
+            if (map) {
+                try {
+                    map = null;
+                    deliveryMarker = null;
+                    storeMarker = null;
+                    customerMarker = null;
+                    routePath = null;
+                } catch (e) {}
+            }
 
             map = new google.maps.Map(mapElement, {
                 zoom: 13,
@@ -792,7 +808,7 @@
             const highlightClass = isHighlighted ? 'highlighted' : '';
 
             return `
-                <div class="order-card ${highlightClass}">
+                <div class="order-card ${highlightClass}" data-order-id="${order.orderId}">
                     <div class="order-header">
                         <div class="order-id">${order.orderId}</div>
                         <div class="order-status" style="background: ${statusColor}">
@@ -801,8 +817,8 @@
                     </div>
 
                     ${showMap ? `
-                    <div class="map-container">
-                        <div id="map"></div>
+                    <div class="map-container" id="map-container-${order.orderId}">
+                        <div id="map-${order.orderId}" class="order-map"></div>
                         <div class="map-overlay">
                             <h4><i class="fas fa-route"></i> Live Tracking</h4>
                             <div class="live-indicator">
@@ -978,23 +994,37 @@
             }
         }
 
-        // Event listeners
-        document.getElementById('closeCancelModal').addEventListener('click', closeCancelModal);
-        document.getElementById('confirmCancel').addEventListener('click', confirmCancellation);
-        document.querySelector('.cancel-modal-overlay').addEventListener('click', closeCancelModal);
+        // Event listeners (attach safely only if elements exist)
+        const closeCancelBtn = document.getElementById('closeCancelModal');
+        if (closeCancelBtn) closeCancelBtn.addEventListener('click', closeCancelModal);
+        const confirmCancelBtn = document.getElementById('confirmCancel');
+        if (confirmCancelBtn) confirmCancelBtn.addEventListener('click', confirmCancellation);
+        const cancelOverlay = document.querySelector('.cancel-modal-overlay');
+        if (cancelOverlay) cancelOverlay.addEventListener('click', closeCancelModal);
 
-        // Authentication check - redirect to login if not authenticated
+        // Authentication check - respect Django session when available and redirect to login if not authenticated
         window.addEventListener('DOMContentLoaded', function() {
+            // If Django provided an authenticated user, mirror it into localStorage so client-side scripts work
+            {% if user.is_authenticated %}
+                try {
+                    localStorage.setItem('isLoggedIn', 'true');
+                    localStorage.setItem('currentUser', '{{ user.email }}');
+                    localStorage.setItem('userEmail', '{{ user.email }}');
+                    localStorage.setItem('userFirstName', '{{ user.first_name }}');
+                    localStorage.setItem('userLastName', '{{ user.last_name }}');
+                } catch (e) { console.warn('order-tracking: unable to persist Django user to localStorage', e); }
+            {% endif %}
+
             // Check if user is logged in (via localStorage as fallback)
             const isLoggedIn = localStorage.getItem('isLoggedIn') === 'true';
             const currentUser = localStorage.getItem('currentUser');
-            
+
             // If not logged in, redirect to login page
             if (!isLoggedIn || !currentUser) {
                 window.location.href = '{% url "login" %}';
                 return;
             }
-            
+
             // If logged in, load orders
             loadOrders();
         });

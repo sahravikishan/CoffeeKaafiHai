@@ -110,7 +110,40 @@ async function handleSignup(formData) {
             localStorage.setItem('userFirstName', response.user.firstName);
             localStorage.setItem('userLastName', response.user.lastName);
         }
-        
+    
+        // Ensure client-side session keys are consistent with login flow
+        if (response.user && response.user.email) {
+            try {
+                // Set currentUser so other modules (orders, profile) can find the user
+                localStorage.setItem('currentUser', response.user.email);
+
+                // Mirror into users database used by the client for profile autofill/fallback
+                const users = JSON.parse(localStorage.getItem('users') || '{}');
+                users[response.user.email] = users[response.user.email] || {};
+                users[response.user.email].firstName = response.user.firstName || users[response.user.email].firstName || '';
+                users[response.user.email].lastName = response.user.lastName || users[response.user.email].lastName || '';
+                users[response.user.email].phone = response.user.phone || users[response.user.email].phone || '';
+                try { localStorage.setItem('users', JSON.stringify(users)); } catch(e) { /* ignore storage errors */ }
+
+                // Initialize a basic userProfile_{email} so profile UI can auto-fill immediately
+                const profileKey = `userProfile_${response.user.email}`;
+                if (!localStorage.getItem(profileKey)) {
+                    const starterProfile = {
+                        firstName: response.user.firstName || '',
+                        lastName: response.user.lastName || '',
+                        email: response.user.email || '',
+                        phone: response.user.phone || '',
+                        coffeePreferences: {},
+                        avatar: response.user.avatar || `https://ui-avatars.com/api/?name=${encodeURIComponent((response.user.firstName||'') + ' ' + (response.user.lastName||''))}&size=200&background=D2691E&color=fff&bold=true`,
+                        memberSince: new Date().toLocaleString('en-US', { month: 'long', year: 'numeric' })
+                    };
+                    try { localStorage.setItem(profileKey, JSON.stringify(starterProfile)); } catch(e) { /* ignore */ }
+                }
+            } catch (e) {
+                console.warn('signup: failed to persist additional client-side user info', e);
+            }
+        }
+
         localStorage.setItem('isLoggedIn', 'true');
         
         return response;
