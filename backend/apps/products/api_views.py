@@ -1,0 +1,568 @@
+"""
+API view functions for authentication, payments, and OTP handling.
+These views handle JSON requests from the frontend.
+"""
+
+from django.http import JsonResponse
+from django.views.decorators.http import require_http_methods
+from django.views.decorators.csrf import csrf_exempt
+import json
+from datetime import datetime, timedelta
+import random
+from database.models import User, OTP, Order, Payment
+
+
+# ==========================================
+# OTP ENDPOINTS
+# ==========================================
+
+@csrf_exempt
+@require_http_methods(["POST"])
+def send_otp_email(request):
+    """
+    Send OTP to user's email for password reset.
+    Expected request body: { "email": "user@example.com", "otp": "123456" }
+    """
+    try:
+        data = json.loads(request.body)
+        email = data.get('email')
+        otp = data.get('otp')
+        
+        if not email or not otp:
+            return JsonResponse({
+                'success': False,
+                'message': 'Email and OTP are required'
+            }, status=400)
+        
+        # Save OTP to MongoDB
+        OTP.create(email, otp, expiry_minutes=10)
+        
+        # TODO: Integrate with email service (SendGrid, AWS SES, Nodemailer, etc.)
+        # For now, just log it
+        print(f"OTP Email Request: Email={email}, OTP={otp}")
+        
+        return JsonResponse({
+            'success': True,
+            'message': 'OTP sent successfully',
+            'email': email
+        })
+        
+    except json.JSONDecodeError:
+        return JsonResponse({
+            'success': False,
+            'message': 'Invalid JSON'
+        }, status=400)
+    except Exception as e:
+        return JsonResponse({
+            'success': False,
+            'message': str(e)
+        }, status=500)
+
+
+@csrf_exempt
+@require_http_methods(["POST"])
+def validate_otp(request):
+    """
+    Validate OTP provided by user.
+    Expected request body: { "email": "user@example.com", "otp": "123456" }
+    """
+    try:
+        data = json.loads(request.body)
+        email = data.get('email')
+        otp = data.get('otp')
+        
+        if not email or not otp:
+            return JsonResponse({
+                'valid': False,
+                'message': 'Email and OTP are required'
+            }, status=400)
+        
+        # Verify OTP against MongoDB
+        is_valid = OTP.verify(email, otp)
+        
+        if is_valid:
+            return JsonResponse({
+                'valid': True,
+                'message': 'OTP is valid'
+            })
+        else:
+            return JsonResponse({
+                'valid': False,
+                'message': 'Invalid or expired OTP'
+            }, status=400)
+        
+    except json.JSONDecodeError:
+        return JsonResponse({
+            'valid': False,
+            'message': 'Invalid JSON'
+        }, status=400)
+    except Exception as e:
+        return JsonResponse({
+            'valid': False,
+            'message': str(e)
+        }, status=500)
+
+
+# ==========================================
+# AUTHENTICATION ENDPOINTS
+# ==========================================
+
+@csrf_exempt
+@require_http_methods(["POST"])
+def login(request):
+    """
+    User login endpoint.
+    Expected request body: { "email": "user@example.com", "password": "password123" }
+    """
+    try:
+        data = json.loads(request.body)
+        email = data.get('email')
+        password = data.get('password')
+        
+        if not email or not password:
+            return JsonResponse({
+                'message': 'Email and password are required'
+            }, status=400)
+        
+        # Find user in MongoDB
+        user = User.find_by_email(email)
+        if not user:
+            return JsonResponse({
+                'message': 'Invalid email or password'
+            }, status=400)
+        
+        # TODO: Verify password with bcrypt
+        # For now, check plaintext (NOT RECOMMENDED FOR PRODUCTION)
+        if user.get('password') != password:
+            return JsonResponse({
+                'message': 'Invalid email or password'
+            }, status=400)
+        
+        # TODO: Generate JWT tokens
+        
+        return JsonResponse({
+            'message': 'Login successful',
+            'accessToken': f'token_for_{email}',
+            'refreshToken': f'refresh_token_for_{email}',
+            'user': {
+                'email': email,
+                'firstName': user.get('firstName'),
+                'lastName': user.get('lastName')
+            }
+        })
+        
+    except json.JSONDecodeError:
+        return JsonResponse({
+            'message': 'Invalid JSON'
+        }, status=400)
+    except Exception as e:
+        return JsonResponse({
+            'message': str(e)
+        }, status=500)
+
+
+@csrf_exempt
+@require_http_methods(["POST"])
+def signup(request):
+    """
+    User signup endpoint.
+    Expected request body: { 
+        "firstName": "John", 
+        "lastName": "Doe",
+        "email": "john@example.com", 
+        "phone": "9876543210",
+        "password": "password123" 
+    }
+    """
+    try:
+        data = json.loads(request.body)
+        firstName = data.get('firstName')
+        lastName = data.get('lastName')
+        email = data.get('email')
+        phone = data.get('phone')
+        password = data.get('password')
+        
+        if not all([firstName, lastName, email, phone, password]):
+            return JsonResponse({
+                'message': 'All fields are required'
+            }, status=400)
+        
+        # Check if email already exists in MongoDB
+        existing_user = User.find_by_email(email)
+        if existing_user:
+            return JsonResponse({
+                'message': 'Email already registered'
+            }, status=400)
+        
+        # TODO: Hash password with bcrypt before saving
+        # For now, save plaintext (NOT RECOMMENDED FOR PRODUCTION)
+        password_hash = password
+        
+        # Save user to MongoDB
+        user_id = User.create(firstName, lastName, email, phone, password_hash)
+        
+        # TODO: Generate JWT tokens
+        
+        return JsonResponse({
+            'message': 'Account created successfully',
+            'accessToken': f'token_for_{email}',
+            'refreshToken': f'refresh_token_for_{email}',
+            'user': {
+                'email': email,
+                'firstName': firstName,
+                'lastName': lastName
+            }
+        }, status=201)
+        
+    except json.JSONDecodeError:
+        return JsonResponse({
+            'message': 'Invalid JSON'
+        }, status=400)
+    except Exception as e:
+        return JsonResponse({
+            'message': str(e)
+        }, status=500)
+
+
+@csrf_exempt
+@require_http_methods(["POST"])
+def forgot_password(request):
+    """
+    Forgot password endpoint - sends OTP to user email.
+    Expected request body: { "email": "user@example.com" }
+    """
+    try:
+        data = json.loads(request.body)
+        email = data.get('email')
+        
+        if not email:
+            return JsonResponse({
+                'message': 'Email is required'
+            }, status=400)
+        
+        # Check if user exists in MongoDB
+        user = User.find_by_email(email)
+        if not user:
+            return JsonResponse({
+                'message': 'Email not found'
+            }, status=400)
+        
+        # Generate 6-digit OTP
+        otp = str(random.randint(100000, 999999))
+        
+        # Save OTP to MongoDB with expiry (10 minutes)
+        OTP.create(email, otp, expiry_minutes=10)
+        
+        # TODO: Send OTP email using email service
+        print(f"Password Reset OTP for {email}: {otp}")
+        
+        return JsonResponse({
+            'message': 'OTP sent to your email'
+        })
+        
+    except json.JSONDecodeError:
+        return JsonResponse({
+            'message': 'Invalid JSON'
+        }, status=400)
+    except Exception as e:
+        return JsonResponse({
+            'message': str(e)
+        }, status=500)
+
+
+@csrf_exempt
+@require_http_methods(["POST"])
+def reset_password(request):
+    """
+    Reset password endpoint - verifies OTP and updates password.
+    Expected request body: { 
+        "email": "user@example.com", 
+        "otp": "123456",
+        "newPassword": "newpassword123" 
+    }
+    """
+    try:
+        data = json.loads(request.body)
+        email = data.get('email')
+        otp = data.get('otp')
+        newPassword = data.get('newPassword')
+        
+        if not all([email, otp, newPassword]):
+            return JsonResponse({
+                'message': 'Email, OTP, and new password are required'
+            }, status=400)
+        
+        # Validate OTP
+        is_valid = OTP.verify(email, otp)
+        if not is_valid:
+            return JsonResponse({
+                'message': 'Invalid or expired OTP'
+            }, status=400)
+        
+        # TODO: Check password strength
+        # TODO: Hash new password with bcrypt
+        password_hash = newPassword
+        
+        # Update user password in MongoDB
+        User.update(email, {'password': password_hash})
+        
+        return JsonResponse({
+            'message': 'Password reset successfully'
+        })
+        
+    except json.JSONDecodeError:
+        return JsonResponse({
+            'message': 'Invalid JSON'
+        }, status=400)
+    except Exception as e:
+        return JsonResponse({
+            'message': str(e)
+        }, status=500)
+
+
+# ==========================================
+# PAYMENT ENDPOINTS
+# ==========================================
+
+@csrf_exempt
+@require_http_methods(["POST"])
+def create_order(request):
+    """
+    Create payment order endpoint for Razorpay.
+    Expected request body: { 
+        "amount": 1000, 
+        "currency": "INR",
+        "receipt": "order_id_123",
+        "email": "user@example.com",
+        "items": []
+    }
+    """
+    try:
+        data = json.loads(request.body)
+        amount = data.get('amount')
+        currency = data.get('currency', 'INR')
+        receipt = data.get('receipt')
+        email = data.get('email')
+        items = data.get('items', [])
+        
+        if not amount or not receipt:
+            return JsonResponse({
+                'success': False,
+                'message': 'Amount and receipt are required'
+            }, status=400)
+        
+        # Create order in MongoDB
+        order_id = Order.create(email, items, amount, status='pending')
+        
+        # TODO: Create order in Razorpay using razorpay SDK
+        
+        razorpay_order_id = f'order_{datetime.now().timestamp()}'.replace('.', '_')
+        
+        # Create payment record in MongoDB
+        Payment.create(str(order_id), email, amount, razorpay_order_id, status='pending')
+        
+        return JsonResponse({
+            'success': True,
+            'razorpay_order_id': razorpay_order_id,
+            'amount': amount,
+            'currency': currency
+        })
+        
+    except json.JSONDecodeError:
+        return JsonResponse({
+            'success': False,
+            'message': 'Invalid JSON'
+        }, status=400)
+    except Exception as e:
+        return JsonResponse({
+            'success': False,
+            'message': str(e)
+        }, status=500)
+
+
+@csrf_exempt
+@require_http_methods(["POST"])
+def verify_payment(request):
+    """
+    Verify payment signature from Razorpay.
+    Expected request body: { 
+        "razorpay_order_id": "order_123",
+        "razorpay_payment_id": "pay_123",
+        "razorpay_signature": "signature_123",
+        "email": "user@example.com"
+    }
+    """
+    try:
+        data = json.loads(request.body)
+        order_id = data.get('razorpay_order_id')
+        payment_id = data.get('razorpay_payment_id')
+        signature = data.get('razorpay_signature')
+        email = data.get('email')
+        
+        if not all([order_id, payment_id, signature]):
+            return JsonResponse({
+                'verified': False,
+                'message': 'Missing payment details'
+            }, status=400)
+        
+        # TODO: Verify signature using Razorpay SDK
+        # For now, assume signature is valid
+        
+        # Find payment in MongoDB by Razorpay order ID
+        payment = Payment.get_by_razorpay_order_id(order_id)
+        if payment:
+            # Update payment status to verified in MongoDB
+            Payment.update_status(payment['_id'], 'verified', payment_id, signature)
+            
+            # Update order status
+            order_id_str = payment.get('orderId')
+            if order_id_str:
+                Order.update_status(order_id_str, 'paid')
+        
+        return JsonResponse({
+            'verified': True,
+            'message': 'Payment verified successfully'
+        })
+        
+    except json.JSONDecodeError:
+        return JsonResponse({
+            'verified': False,
+            'message': 'Invalid JSON'
+        }, status=400)
+    except Exception as e:
+        return JsonResponse({
+            'verified': False,
+            'message': str(e)
+        }, status=500)
+
+
+@csrf_exempt
+@require_http_methods(["POST"])
+def process_payment(request):
+    """
+    Process payment endpoint (alternative to Razorpay if needed).
+    Expected request body: { 
+        "amount": 1000,
+        "method": "razorpay",
+        "email": "user@example.com",
+        "orderId": "order_123"
+    }
+    """
+    try:
+        data = json.loads(request.body)
+        amount = data.get('amount')
+        method = data.get('method')
+        email = data.get('email')
+        order_id = data.get('orderId')
+        
+        if not all([amount, method, email]):
+            return JsonResponse({
+                'success': False,
+                'message': 'Amount, method, and email are required'
+            }, status=400)
+        
+        # TODO: Process payment based on method
+        
+        # Create payment record in MongoDB
+        payment_id = Payment.create(order_id, email, amount, '', status='processing')
+        
+        # Update order status
+        if order_id:
+            Order.update_status(order_id, 'processing')
+        
+        return JsonResponse({
+            'success': True,
+            'message': 'Payment processed successfully',
+            'transaction_id': f'txn_{datetime.now().timestamp()}'
+        })
+        
+    except json.JSONDecodeError:
+        return JsonResponse({
+            'success': False,
+            'message': 'Invalid JSON'
+        }, status=400)
+    except Exception as e:
+        return JsonResponse({
+            'success': False,
+            'message': str(e)
+        }, status=500)
+
+
+# ==========================================
+# ADDITIONAL DATA ENDPOINTS
+# ==========================================
+
+@csrf_exempt
+@require_http_methods(["GET"])
+def get_orders(request):
+    """
+    Get orders for a user.
+    Expected query params: ?email=user@example.com
+    """
+    try:
+        email = request.GET.get('email')
+        
+        if not email:
+            return JsonResponse({
+                'success': False,
+                'message': 'Email is required'
+            }, status=400)
+        
+        # Fetch orders from MongoDB
+        orders = Order.get_by_email(email)
+        
+        # Convert ObjectId to string for JSON serialization
+        orders_data = []
+        for order in orders:
+            order['_id'] = str(order['_id'])
+            orders_data.append(order)
+        
+        return JsonResponse({
+            'success': True,
+            'orders': orders_data,
+            'total': len(orders_data)
+        })
+        
+    except Exception as e:
+        return JsonResponse({
+            'success': False,
+            'message': str(e)
+        }, status=500)
+
+
+@csrf_exempt
+@require_http_methods(["GET"])
+def get_payments(request):
+    """
+    Get payment history for a user.
+    Expected query params: ?email=user@example.com
+    """
+    try:
+        email = request.GET.get('email')
+        
+        if not email:
+            return JsonResponse({
+                'success': False,
+                'message': 'Email is required'
+            }, status=400)
+        
+        # Fetch payments from MongoDB
+        payments = Payment.get_by_email(email)
+        
+        # Convert ObjectId to string for JSON serialization
+        payments_data = []
+        for payment in payments:
+            payment['_id'] = str(payment['_id'])
+            payments_data.append(payment)
+        
+        return JsonResponse({
+            'success': True,
+            'payments': payments_data,
+            'total': len(payments_data)
+        })
+        
+    except Exception as e:
+        return JsonResponse({
+            'success': False,
+            'message': str(e)
+        }, status=500)
