@@ -28,6 +28,8 @@
     background: rgba(0, 0, 0, 0.85);
     backdrop-filter: blur(8px);
     animation: fadeIn 0.3s ease;
+    z-index: 9999;
+    pointer-events: auto;
 }
 
 .menu-modal-content {
@@ -98,7 +100,9 @@
     box-shadow: 0 4px 15px rgba(210, 105, 30, 0.3);
     will-change: transform;
     flex-shrink: 0;
-    z-index: 10001;
+    z-index: 10002;
+    position: relative;
+    pointer-events: auto;
 }
 
 .menu-modal-close:hover {

@@ -106,29 +106,29 @@ def customer_profile(request):
     try:
         # Require authenticated session - redirect to login if not authenticated
         email = request.session.get('email')
-        if not email:
-            return redirect('login')
+        # --- FIX: Comment out the redirect to let JS handle it ---
+        # if not email:
+        #     return redirect('login')
 
-        # Fetch user from MongoDB
-        user = User.find_by_email(email)
-        if not user:
-            return redirect('login')
-        
-        context['is_authenticated'] = True
-        context['user'] = {
-            'email': user.get('email'),
-            'firstName': user.get('firstName', ''),
-            'lastName': user.get('lastName', ''),
-            'phone': user.get('phone', ''),
-        }
-        
-        # Fetch user orders from MongoDB
-        orders = Order.get_by_email(email)
-        context['orders'] = orders if orders else []
+        # Fetch user from MongoDB (even if no email, context remains empty and JS will redirect)
+        user = User.find_by_email(email) if email else None
+        if user:
+            context['is_authenticated'] = True
+            context['user'] = {
+                'email': user.get('email'),
+                'firstName': user.get('firstName', ''),
+                'lastName': user.get('lastName', ''),
+                'phone': user.get('phone', ''),
+            }
+
+            # Fetch user orders from MongoDB
+            orders = Order.get_by_email(email)
+            context['orders'] = orders if orders else []
     except Exception as e:
         print(f"Error fetching profile data: {e}")
-        return redirect('login')
-    
+        # --- FIX: No redirect here; let JS handle ---
+        # return redirect('login')
+
     return render(request, 'pages/customer/profile.html', context)
 
 
@@ -139,16 +139,17 @@ def order_tracking(request):
     try:
         # Require authenticated session
         email = request.session.get('email')
-        if not email:
-            return redirect('login')
+        # --- FIX: Comment out the redirect to let JS handle it ---
+        # if not email:
+        #     return redirect('login')
 
-        # Fetch user orders from MongoDB
-        orders = Order.get_by_email(email)
+        # Fetch user orders from MongoDB (even if no email, context empty and JS will redirect)
+        orders = Order.get_by_email(email) if email else []
         context['orders'] = orders
         context['email'] = email
     except Exception as e:
         print(f"Error fetching orders: {e}")
-    
+
     return render(request, 'pages/customer/order-tracking.html', context)
 
 
@@ -187,16 +188,16 @@ def admin_dashboard(request):
     try:
         from database.mongo import get_database
         db = get_database()
-        
+
         # Fetch dashboard statistics
         total_orders = db['orders'].count_documents({})
         pending_orders = db['orders'].count_documents({'status': 'pending'})
         completed_orders = db['orders'].count_documents({'status': 'paid'})
         total_users = db['users'].count_documents({})
-        
+
         # Fetch recent orders
         recent_orders = list(db['orders'].find({}).sort('createdAt', -1).limit(10))
-        
+
         context = {
             'total_orders': total_orders,
             'pending_orders': pending_orders,
@@ -206,5 +207,5 @@ def admin_dashboard(request):
         }
     except Exception as e:
         print(f"Error fetching admin data: {e}")
-    
+
     return render(request, 'pages/admin/admin-dashboard.html', context)

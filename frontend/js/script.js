@@ -96,11 +96,16 @@ document.addEventListener('DOMContentLoaded', function() {
         button.addEventListener('click', function() {
             const drinkCard = this.closest('.drink-card');
             const drinkName = drinkCard.querySelector('.drink-name').textContent;
-            
-            // Open the menu modal to show detailed coffee variations
+
+            // --- FIX: Add smooth fade-in animation instead of abrupt display ---
             const menuModal = document.getElementById('menuModal');
             if (menuModal) {
-                menuModal.style.display = 'block';
+                menuModal.style.opacity = '0';  // Start hidden
+                menuModal.style.display = 'block';  // Make visible
+                setTimeout(() => {
+                    menuModal.style.transition = 'opacity 0.5s ease';  // Animate
+                    menuModal.style.opacity = '1';
+                }, 10);  // Small delay for display to take effect
                 document.body.style.overflow = 'hidden';
             }
         });
