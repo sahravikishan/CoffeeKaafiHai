@@ -1,0 +1,874 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <link rel="icon" href="logo.png" type="image/png">
+    <title>Admin Login - CoffeeKaafiHai</title>
+    
+    <!-- Bootstrap CSS -->
+    <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/css/bootstrap.min.css" rel="stylesheet">
+    
+    <!-- Google Fonts -->
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Playfair+Display:wght@400;700;900&family=Poppins:wght@300;400;500;600;700&display=swap" rel="stylesheet">
+    
+    <!-- Font Awesome -->
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.5.1/css/all.min.css">
+    
+    <style>
+        :root {
+            --primary-dark: #1a1a1a;
+            --accent: #D2691E;
+            --light-brown: #8B4513;
+            --gold: #D4AF37;
+            --white: #ffffff;
+            --cream: #F8F4E9;
+        }
+
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+
+        html {
+            overflow-y: auto;
+            overflow-x: hidden;
+        }
+
+        body {
+            font-family: 'Poppins', sans-serif;
+            overflow-x: hidden;
+            overflow-y: auto;
+        }
+        
+        .auth-container {
+            min-height: 100vh;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            background: linear-gradient(135deg, #0a0a0a 0%, #1a1a1a 50%, #2a1810 100%);
+            position: relative;
+            overflow: hidden;
+            padding: 80px 20px 60px;
+        }
+        
+        .auth-container::before {
+            content: '';
+            position: fixed;
+            top: 0;
+            left: 0;
+            right: 0;
+            bottom: 0;
+            background-image: 
+                radial-gradient(circle at 20% 30%, rgba(212, 175, 55, 0.08) 0%, transparent 50%),
+                radial-gradient(circle at 80% 70%, rgba(210, 105, 30, 0.08) 0%, transparent 50%),
+                radial-gradient(circle at 50% 50%, rgba(139, 69, 19, 0.05) 0%, transparent 70%);
+            animation: gradientShift 15s ease infinite;
+            pointer-events: none;
+        }
+        
+        @keyframes gradientShift {
+            0%, 100% { opacity: 1; }
+            50% { opacity: 0.7; }
+        }
+        
+        .coffee-beans {
+            position: fixed;
+            width: 100%;
+            height: 100%;
+            overflow: hidden;
+            pointer-events: none;
+            top: 0;
+            left: 0;
+        }
+        
+        .coffee-bean {
+            position: absolute;
+            font-size: 2rem;
+            color: rgba(212, 175, 55, 0.06);
+            animation: float 20s infinite ease-in-out;
+        }
+        
+        .coffee-bean:nth-child(1) { left: 10%; top: 20%; animation-delay: 0s; }
+        .coffee-bean:nth-child(2) { left: 85%; top: 15%; animation-delay: 3s; }
+        .coffee-bean:nth-child(3) { left: 15%; top: 80%; animation-delay: 6s; }
+        .coffee-bean:nth-child(4) { left: 90%; top: 75%; animation-delay: 9s; }
+        
+        @keyframes float {
+            0%, 100% { transform: translateY(0) rotate(0deg); }
+            50% { transform: translateY(-30px) rotate(180deg); }
+        }
+        
+        .auth-card {
+            background: rgba(26, 26, 26, 0.95);
+            border-radius: 30px;
+            box-shadow: 0 30px 80px rgba(0, 0, 0, 0.8);
+            max-width: 520px;
+            width: 100%;
+            padding: 50px 45px;
+            position: relative;
+            z-index: 1;
+            border: 2px solid rgba(212, 175, 55, 0.3);
+            animation: slideUp 0.6s ease-out;
+            margin: 20px auto;
+        }
+
+        @keyframes slideUp {
+            from {
+                opacity: 0;
+                transform: translateY(50px);
+            }
+            to {
+                opacity: 1;
+                transform: translateY(0);
+            }
+        }
+
+        .auth-logo {
+            text-align: center;
+            margin-bottom: 35px;
+        }
+        
+        .auth-logo img {
+            width: 110px;
+            height: 110px;
+            border-radius: 50%;
+            object-fit: cover;
+            border: 5px solid var(--accent);
+            box-shadow: 0 10px 30px rgba(210, 105, 30, 0.4);
+            margin-bottom: 20px;
+            transition: transform 0.3s ease;
+        }
+        
+        .auth-logo img:hover {
+            transform: scale(1.05) rotate(5deg);
+        }
+        
+        .auth-logo h2 {
+            font-family: 'Playfair Display', serif;
+            font-size: 2.2rem;
+            font-weight: 700;
+            color: var(--gold);
+            margin-bottom: 10px;
+            text-shadow: 2px 2px 4px rgba(0, 0, 0, 0.5);
+        }
+        
+        .auth-logo .admin-badge {
+            display: inline-block;
+            background: linear-gradient(45deg, var(--accent), var(--gold));
+            color: white;
+            padding: 6px 18px;
+            border-radius: 20px;
+            font-size: 0.85rem;
+            font-weight: 600;
+            margin-bottom: 15px;
+            box-shadow: 0 4px 15px rgba(212, 175, 55, 0.3);
+        }
+        
+        .auth-logo p {
+            color: #999;
+            font-size: 1rem;
+            margin: 0;
+            line-height: 1.6;
+        }
+
+        .form-label {
+            font-weight: 600;
+            color: var(--cream);
+            margin-bottom: 8px;
+            font-size: 0.95rem;
+            display: flex;
+            align-items: center;
+            gap: 6px;
+        }
+        
+        .form-label i {
+            color: var(--accent);
+            font-size: 0.9rem;
+        }
+
+        .form-control {
+            border: 2px solid rgba(210, 105, 30, 0.3);
+            border-radius: 15px;
+            padding: 13px 20px;
+            font-size: 1rem;
+            transition: all 0.3s ease;
+            background-color: rgba(255, 255, 255, 0.05);
+            color: #ffffff !important;
+        }
+        
+        .form-control::placeholder {
+            color: rgba(255, 255, 255, 0.4) !important;
+        }
+
+        .form-control:focus {
+            border-color: var(--accent);
+            box-shadow: 0 0 0 0.3rem rgba(210, 105, 30, 0.3);
+            background-color: rgba(255, 255, 255, 0.08);
+            transform: translateY(-2px);
+            color: #ffffff !important;
+        }
+
+        .password-wrapper {
+            position: relative;
+        }
+
+        .password-toggle {
+            position: absolute;
+            right: 18px;
+            top: 50%;
+            transform: translateY(-50%);
+            background: none;
+            border: none;
+            color: #999;
+            cursor: pointer;
+            font-size: 1.1rem;
+            transition: all 0.3s ease;
+            padding: 5px;
+        }
+        
+        .password-toggle:hover {
+            color: var(--accent);
+            transform: translateY(-50%) scale(1.1);
+        }
+
+        .forgot-password {
+            text-align: right;
+            margin-top: 10px;
+        }
+
+        .forgot-password a {
+            color: var(--accent);
+            text-decoration: none;
+            font-size: 0.9rem;
+            font-weight: 600;
+            transition: all 0.3s ease;
+            position: relative;
+            display: inline-flex;
+            align-items: center;
+            gap: 6px;
+        }
+        
+        .forgot-password a::after {
+            content: '';
+            position: absolute;
+            bottom: -2px;
+            left: 0;
+            width: 0;
+            height: 2px;
+            background: var(--accent);
+            transition: width 0.3s ease;
+        }
+        
+        .forgot-password a:hover::after {
+            width: 100%;
+        }
+
+        .forgot-password a:hover {
+            color: var(--gold);
+        }
+
+        .btn-auth {
+            background: linear-gradient(45deg, var(--accent), var(--gold));
+            color: white;
+            border: none;
+            padding: 15px 35px;
+            font-size: 1.1rem;
+            font-weight: 600;
+            border-radius: 15px;
+            cursor: pointer;
+            transition: all 0.3s ease;
+            box-shadow: 0 8px 25px rgba(212, 175, 55, 0.4);
+            width: 100%;
+            margin-top: 25px;
+            position: relative;
+            overflow: hidden;
+        }
+        
+        .btn-auth::before {
+            content: '';
+            position: absolute;
+            top: 50%;
+            left: 50%;
+            width: 0;
+            height: 0;
+            border-radius: 50%;
+            background: rgba(255, 255, 255, 0.3);
+            transform: translate(-50%, -50%);
+            transition: width 0.6s, height 0.6s;
+        }
+        
+        .btn-auth:hover::before {
+            width: 300px;
+            height: 300px;
+        }
+
+        .btn-auth:hover {
+            transform: translateY(-3px);
+            box-shadow: 0 12px 35px rgba(212, 175, 55, 0.6);
+        }
+
+        .btn-auth:active {
+            transform: translateY(-1px);
+        }
+        
+        .btn-auth span {
+            position: relative;
+            z-index: 1;
+        }
+
+        .back-home {
+            position: fixed;
+            top: 30px;
+            left: 30px;
+            z-index: 10;
+        }
+        
+        .back-home a {
+            color: white;
+            text-decoration: none;
+            font-size: 1rem;
+            font-weight: 600;
+            display: flex;
+            align-items: center;
+            gap: 10px;
+            padding: 12px 24px;
+            background: rgba(255, 255, 255, 0.08);
+            border-radius: 30px;
+            backdrop-filter: blur(15px);
+            border: 2px solid rgba(255, 255, 255, 0.15);
+            transition: all 0.3s ease;
+            box-shadow: 0 4px 15px rgba(0, 0, 0, 0.3);
+        }
+        
+        .back-home a:hover {
+            background: rgba(212, 175, 55, 0.2);
+            border-color: var(--gold);
+            transform: translateX(-5px);
+            box-shadow: 0 6px 20px rgba(212, 175, 55, 0.3);
+        }
+
+        .signup-link {
+            text-align: center;
+            margin-top: 20px;
+            padding-top: 20px;
+            border-top: 1px solid rgba(255, 255, 255, 0.1);
+        }
+        
+        .signup-link p {
+            color: #999;
+            margin-bottom: 10px;
+        }
+        
+        .signup-link a {
+            color: var(--accent);
+            text-decoration: none;
+            font-weight: 600;
+            transition: all 0.3s ease;
+            position: relative;
+            display: inline-flex;
+            align-items: center;
+            gap: 6px;
+        }
+        
+        .signup-link a::after {
+            content: '';
+            position: absolute;
+            bottom: -2px;
+            left: 0;
+            width: 0;
+            height: 2px;
+            background: var(--accent);
+            transition: width 0.3s ease;
+        }
+        
+        .signup-link a:hover::after {
+            width: 100%;
+        }
+        
+        .signup-link a:hover {
+            color: var(--gold);
+        }
+
+        /* TOAST NOTIFICATION WITH PROGRESS BAR */
+        .toast-container {
+            position: fixed;
+            top: 90px;
+            right: 25px;
+            z-index: 9999;
+            display: flex;
+            flex-direction: column;
+            gap: 15px;
+            max-width: 450px;
+        }
+
+        .toast-notification {
+            padding: 20px 28px;
+            border-radius: 18px;
+            box-shadow: 0 12px 45px rgba(0, 0, 0, 0.35);
+            display: flex;
+            align-items: center;
+            gap: 16px;
+            min-width: 340px;
+            max-width: 450px;
+            animation: slideInBounce 0.6s cubic-bezier(0.68, -0.55, 0.265, 1.55), fadeOutSlide 0.5s ease 3.5s forwards;
+            border: 2px solid rgba(255, 255, 255, 0.5);
+            backdrop-filter: blur(12px);
+            position: relative;
+            overflow: hidden;
+        }
+        
+        .toast-notification::before {
+            content: '';
+            position: absolute;
+            top: 0;
+            left: 0;
+            width: 100%;
+            height: 4px;
+            background: rgba(255, 255, 255, 0.4);
+            animation: progressBar 4s linear;
+        }
+        
+        @keyframes progressBar {
+            from { width: 100%; }
+            to { width: 0%; }
+        }
+        
+        @keyframes slideInBounce {
+            0% {
+                transform: translateX(500px) scale(0.8);
+                opacity: 0;
+            }
+            60% {
+                transform: translateX(-20px) scale(1.05);
+                opacity: 1;
+            }
+            100% {
+                transform: translateX(0) scale(1);
+                opacity: 1;
+            }
+        }
+        
+        @keyframes fadeOutSlide {
+            0% {
+                opacity: 1;
+                transform: translateX(0) scale(1);
+            }
+            100% {
+                opacity: 0;
+                transform: translateX(500px) scale(0.8);
+            }
+        }
+        
+        .toast-icon {
+            font-size: 2rem;
+            flex-shrink: 0;
+            color: white;
+            animation: iconPop 0.5s ease 0.3s;
+        }
+        
+        @keyframes iconPop {
+            0%, 100% { transform: scale(1); }
+            50% { transform: scale(1.2); }
+        }
+        
+        .toast-content {
+            flex: 1;
+        }
+        
+        .toast-message {
+            font-size: 1.05rem;
+            font-weight: 600;
+            color: white;
+            margin: 0;
+            line-height: 1.5;
+            text-shadow: 1px 1px 2px rgba(0, 0, 0, 0.2);
+        }
+        
+        .toast-success {
+            background: linear-gradient(135deg, #00C851 0%, #007E33 100%);
+        }
+        
+        .toast-error {
+            background: linear-gradient(135deg, #ff4444 0%, #cc0000 100%);
+        }
+        
+        .toast-warning {
+            background: linear-gradient(135deg, #ffbb33 0%, #ff8800 100%);
+        }
+        
+        .toast-info {
+            background: linear-gradient(135deg, #33b5e5 0%, #0099cc 100%);
+        }
+
+        @media (max-width: 576px) {
+            .auth-container {
+                padding: 70px 15px 50px;
+            }
+
+            .auth-card {
+                padding: 40px 30px;
+            }
+            
+            .back-home {
+                top: 20px;
+                left: 20px;
+            }
+
+            .back-home a {
+                padding: 10px 18px;
+                font-size: 0.9rem;
+            }
+            
+            .auth-logo h2 {
+                font-size: 1.8rem;
+            }
+
+            .auth-logo img {
+                width: 90px;
+                height: 90px;
+            }
+            
+            .toast-container {
+                right: 10px;
+                left: 10px;
+                top: 70px;
+            }
+            
+            .toast-notification {
+                min-width: auto;
+                max-width: 100%;
+            }
+        }
+
+        @media (max-height: 800px) {
+            .auth-container {
+                padding: 70px 20px 50px;
+            }
+
+            .auth-card {
+                padding: 40px 35px;
+            }
+
+            .auth-logo {
+                margin-bottom: 25px;
+            }
+
+            .auth-logo img {
+                width: 90px;
+                height: 90px;
+                margin-bottom: 15px;
+            }
+
+            .auth-logo h2 {
+                font-size: 1.9rem;
+            }
+        }
+    </style>
+</head>
+<body>
+    <div class="back-home">
+        <a href="index.html">
+            <i class="fas fa-arrow-left"></i>
+            Back to Home
+        </a>
+    </div>
+    
+    <div class="coffee-beans">
+        <i class="fas fa-coffee coffee-bean"></i>
+        <i class="fas fa-coffee coffee-bean"></i>
+        <i class="fas fa-coffee coffee-bean"></i>
+        <i class="fas fa-coffee coffee-bean"></i>
+    </div>
+    
+    <div class="toast-container" id="toastContainer"></div>
+
+    <div class="auth-container">
+        <div class="auth-card">
+            <div class="auth-logo">
+                <img src="logo.png" alt="CoffeeKaafiHai Logo">
+                <div class="admin-badge">
+                    <i class="fas fa-shield-alt"></i> ADMIN PANEL
+                </div>
+                <h2>Admin Login</h2>
+                <p>Access the admin dashboard</p>
+            </div>
+
+            <form id="adminLoginForm">
+                <div class="mb-3">
+                    <label for="email" class="form-label">
+                        <i class="fas fa-envelope"></i>
+                        Email Address
+                    </label>
+                    <input type="email" class="form-control" id="email" placeholder="Enter your email" required>
+                </div>
+
+                <div class="mb-3">
+                    <label for="password" class="form-label">
+                        <i class="fas fa-lock"></i>
+                        Password
+                    </label>
+                    <div class="password-wrapper">
+                        <input type="password" class="form-control" id="password" placeholder="Enter your password" required>
+                        <button type="button" class="password-toggle" id="togglePassword">
+                            <i class="fas fa-eye"></i>
+                        </button>
+                    </div>
+                    <div class="forgot-password">
+                        <a href="admin-forgot-password.html">
+                            <i class="fas fa-key"></i> Forgot Password?
+                        </a>
+                    </div>
+                </div>
+
+                <button type="submit" class="btn-auth">
+                    <span>
+                        <i class="fas fa-sign-in-alt"></i>
+                        Login to Dashboard
+                    </span>
+                </button>
+            </form>
+
+            <div class="signup-link">
+                <p>Don't have an account?</p>
+                <a href="admin-signup.html">
+                    <i class="fas fa-user-plus"></i> Create Admin Account
+                </a>
+            </div>
+        </div>
+    </div>
+
+    <!-- Bootstrap JS -->
+    <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/js/bootstrap.bundle.min.js"></script>
+    
+    <script>
+        let activeToast = null;
+        let toastTimeout = null;
+        let loginAttempts = 0;
+        const MAX_LOGIN_ATTEMPTS = 5;
+        const LOCKOUT_TIME = 15 * 60 * 1000; // 15 minutes
+
+        // Password toggle
+        document.getElementById('togglePassword').addEventListener('click', function() {
+            const passwordInput = document.getElementById('password');
+            const icon = this.querySelector('i');
+            const type = passwordInput.type === 'password' ? 'text' : 'password';
+            passwordInput.type = type;
+            icon.classList.toggle('fa-eye');
+            icon.classList.toggle('fa-eye-slash');
+        });
+
+        // Show toast notification with progress bar
+        function showToast(message, type = 'success') {
+            const toastContainer = document.getElementById('toastContainer') || (function() {
+                const c = document.createElement('div');
+                c.id = 'toastContainer';
+                c.className = 'toast-container';
+                document.body.appendChild(c);
+                return c;
+            })();
+
+            if (activeToast && activeToast.parentNode) {
+                clearTimeout(toastTimeout);
+                activeToast.remove();
+                activeToast = null;
+            }
+            
+            const toast = document.createElement('div');
+            toast.className = `toast-notification toast-${type}`;
+            
+            let icon = '';
+            switch(type) {
+                case 'success': icon = '<i class="fas fa-check-circle toast-icon"></i>'; break;
+                case 'error': icon = '<i class="fas fa-times-circle toast-icon"></i>'; break;
+                case 'warning': icon = '<i class="fas fa-exclamation-triangle toast-icon"></i>'; break;
+                case 'info': icon = '<i class="fas fa-info-circle toast-icon"></i>'; break;
+            }
+            
+            toast.innerHTML = `${icon}<div class="toast-content"><p class="toast-message">${message}</p></div>`;
+            toastContainer.appendChild(toast);
+            activeToast = toast;
+            
+            toastTimeout = setTimeout(() => {
+                if (toast.parentNode) {
+                    toast.remove();
+                    if (activeToast === toast) {
+                        activeToast = null;
+                    }
+                }
+            }, 4000);
+        }
+
+        // Check if account is locked
+        function isAccountLocked() {
+            const lockoutUntil = localStorage.getItem('adminLoginLockoutUntil');
+            if (lockoutUntil) {
+                const lockoutTime = parseInt(lockoutUntil);
+                if (Date.now() < lockoutTime) {
+                    const remainingMinutes = Math.ceil((lockoutTime - Date.now()) / 60000);
+                    return { locked: true, remainingMinutes };
+                } else {
+                    localStorage.removeItem('adminLoginLockoutUntil');
+                    localStorage.removeItem('adminLoginAttempts');
+                    loginAttempts = 0;
+                }
+            }
+            return { locked: false };
+        }
+
+        // Get all registered users
+        function getAllUsers() {
+            const users = [];
+            
+            // Get all users from localStorage
+            for (let i = 0; i < localStorage.length; i++) {
+                const key = localStorage.key(i);
+                if (key.startsWith('user_')) {
+                    try {
+                        const userData = JSON.parse(localStorage.getItem(key));
+                        users.push(userData);
+                    } catch (error) {
+                        console.error('Error parsing user data:', error);
+                    }
+                }
+            }
+            
+            return users;
+        }
+
+        // Verify user credentials
+        function verifyCredentials(email, password) {
+            const users = getAllUsers();
+            
+            // Find user by email
+            const user = users.find(u => u.email === email);
+            
+            if (!user) {
+                return { success: false, message: 'Invalid email or password' };
+            }
+            
+            // In a real application, passwords would be hashed
+            // For this demo, we're comparing plain text (NOT SECURE FOR PRODUCTION)
+            if (user.password === password) {
+                return { 
+                    success: true, 
+                    user: {
+                        email: user.email,
+                        firstName: user.firstName,
+                        lastName: user.lastName,
+                        role: user.role,
+                        employeeId: user.employeeId
+                    }
+                };
+            }
+            
+            return { success: false, message: 'Invalid email or password' };
+        }
+
+        // Create session
+        function createSession(user) {
+            const sessionData = {
+                email: user.email,
+                firstName: user.firstName,
+                lastName: user.lastName,
+                role: user.role,
+                employeeId: user.employeeId,
+                loginTime: new Date().toISOString(),
+                token: btoa(`${user.email}:${Date.now()}`)
+            };
+            
+            localStorage.setItem('adminSession', JSON.stringify(sessionData));
+            localStorage.setItem('isAdmin', 'true');
+            localStorage.setItem('adminToken', sessionData.token);
+            
+            // Log activity
+            const activities = JSON.parse(localStorage.getItem('adminActivities') || '[]');
+            activities.unshift({
+                action: 'LOGIN',
+                description: `${user.firstName} ${user.lastName} logged in`,
+                timestamp: new Date().toISOString(),
+                email: user.email
+            });
+            localStorage.setItem('adminActivities', JSON.stringify(activities.slice(0, 100)));
+        }
+
+        // Handle login form submission
+        document.getElementById('adminLoginForm').addEventListener('submit', function(e) {
+            e.preventDefault();
+            
+            // Check if account is locked
+            const lockStatus = isAccountLocked();
+            if (lockStatus.locked) {
+                showToast(`Account locked. Please try again in ${lockStatus.remainingMinutes} minutes.`, 'error');
+                return;
+            }
+            
+            const email = document.getElementById('email').value.trim();
+            const password = document.getElementById('password').value;
+
+            // Validate input
+            if (!email || !password) {
+                showToast('Please enter both email and password.', 'error');
+                return;
+            }
+
+            // Verify credentials
+            const result = verifyCredentials(email, password);
+            
+            if (result.success) {
+                // Reset login attempts
+                localStorage.removeItem('adminLoginAttempts');
+                localStorage.removeItem('adminLoginLockoutUntil');
+                loginAttempts = 0;
+                
+                // Create session
+                createSession(result.user);
+                
+                showToast('Login successful! Redirecting to dashboard...', 'success');
+                
+                // Redirect to admin dashboard
+                setTimeout(() => {
+                    window.location.href = 'admin-dashboard.html';
+                }, 1500);
+            } else {
+                // Increment login attempts
+                loginAttempts = parseInt(localStorage.getItem('adminLoginAttempts') || '0') + 1;
+                localStorage.setItem('adminLoginAttempts', loginAttempts.toString());
+                
+                if (loginAttempts >= MAX_LOGIN_ATTEMPTS) {
+                    const lockoutUntil = Date.now() + LOCKOUT_TIME;
+                    localStorage.setItem('adminLoginLockoutUntil', lockoutUntil.toString());
+                    showToast('Too many failed attempts. Account locked for 15 minutes.', 'error');
+                } else {
+                    const remainingAttempts = MAX_LOGIN_ATTEMPTS - loginAttempts;
+                    showToast(`${result.message}. ${remainingAttempts} attempts remaining.`, 'error');
+                }
+                
+                document.getElementById('password').value = '';
+            }
+        });
+
+        // Check if already logged in
+        if (localStorage.getItem('isAdmin') === 'true') {
+            const session = JSON.parse(localStorage.getItem('adminSession') || '{}');
+            if (session.email) {
+                window.location.href = 'admin-dashboard.html';
+            }
+        }
+
+        // Load login attempts on page load
+        window.addEventListener('DOMContentLoaded', function() {
+            loginAttempts = parseInt(localStorage.getItem('adminLoginAttempts') || '0');
+            
+            // Check if locked
+            const lockStatus = isAccountLocked();
+            if (lockStatus.locked) {
+                showToast(`Account is locked. Please try again in ${lockStatus.remainingMinutes} minutes.`, 'warning');
+            }
+        });
+    </script>
+</body>
+</html>
