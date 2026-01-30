@@ -895,7 +895,7 @@ async function authenticatedFetch(url, options = {}) {
         } else {
             // Refresh failed, redirect to login
             localStorage.clear();
-            window.location.href = '/login.html';
+            window.location.href = '/login/';
         }
     }
     
@@ -906,7 +906,7 @@ async function authenticatedFetch(url, options = {}) {
 function logout() {
     localStorage.removeItem('accessToken');
     localStorage.removeItem('refreshToken');
-    window.location.href = '/login.html';
+    window.location.href = '/login/';
 }
 `;
 

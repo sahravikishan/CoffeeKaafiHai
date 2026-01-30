@@ -905,7 +905,7 @@ class RazorpayPaymentGateway {
                     ` : ''}
                     <div class="razorpay-status-actions">
                         ${type === 'success' ? `
-                            <button class="razorpay-status-btn primary" onclick="razorpayGateway.closeStatusModal(); window.location.href='order-tracking.html?orderId=${data?.orderId || ''}'">
+                            <button class="razorpay-status-btn primary" onclick="razorpayGateway.closeStatusModal(); window.location.href='/order-tracking/?orderId=${data?.orderId || ''}'">
                                 Track Order
                             </button>
                         ` : `

@@ -1,10 +1,10 @@
-<!DOCTYPE html>
+{% load static %}<!DOCTYPE html>
 <html lang="en">
 
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <link rel="icon" href="logo.png" type="image/png">
+    <link rel="icon" href="{% static 'images/logo.png' %}" type="image/png">
     <title>Terms & Conditions - CoffeeKaafiHai</title>
     
     <!-- Bootstrap CSS -->
@@ -210,7 +210,7 @@
 
 <body>
     <div class="back-home">
-        <a href="signup.html">
+        <a href="{% url 'signup' %}">
             <i class="fas fa-arrow-left"></i>
             Back
         </a>
@@ -219,7 +219,7 @@
     <div class="policy-container">
         <div class="container">
             <div class="policy-header">
-                <img src="logo.png" alt="CoffeeKaafiHai Logo" class="policy-logo-badge">
+                <img src="{% static 'images/logo.png' %}" alt="CoffeeKaafiHai Logo" class="policy-logo-badge">
                 <h1 class="policy-title">Terms & Conditions</h1>
                 <p class="policy-subtitle">Please read these terms carefully before using our services</p>
             </div>

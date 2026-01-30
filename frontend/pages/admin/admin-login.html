@@ -1,9 +1,9 @@
-<!DOCTYPE html>
+{% load static %}<!DOCTYPE html>
 <html lang="en">
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <link rel="icon" href="logo.png" type="image/png">
+    <link rel="icon" href="{% static 'images/logo.png' %}" type="image/png">
     <title>Admin Login - CoffeeKaafiHai</title>
     
     <!-- Bootstrap CSS -->
@@ -571,7 +571,7 @@
 </head>
 <body>
     <div class="back-home">
-        <a href="index.html">
+        <a href="{% url 'home' %}">
             <i class="fas fa-arrow-left"></i>
             Back to Home
         </a>
@@ -589,7 +589,7 @@
     <div class="auth-container">
         <div class="auth-card">
             <div class="auth-logo">
-                <img src="logo.png" alt="CoffeeKaafiHai Logo">
+                <img src="{% static 'images/logo.png' %}" alt="CoffeeKaafiHai Logo">
                 <div class="admin-badge">
                     <i class="fas fa-shield-alt"></i> ADMIN PANEL
                 </div>
@@ -618,7 +618,7 @@
                         </button>
                     </div>
                     <div class="forgot-password">
-                        <a href="admin-forgot-password.html">
+                        <a href="{% url 'admin_forgot_password' %}">
                             <i class="fas fa-key"></i> Forgot Password?
                         </a>
                     </div>
@@ -634,7 +634,7 @@
 
             <div class="signup-link">
                 <p>Don't have an account?</p>
-                <a href="admin-signup.html">
+                <a href="{% url 'admin_signup' %}">
                     <i class="fas fa-user-plus"></i> Create Admin Account
                 </a>
             </div>
@@ -831,7 +831,7 @@
                 
                 // Redirect to admin dashboard
                 setTimeout(() => {
-                    window.location.href = 'admin-dashboard.html';
+                    window.location.href = "{% url 'admin_dashboard' %}";
                 }, 1500);
             } else {
                 // Increment login attempts
@@ -855,7 +855,7 @@
         if (localStorage.getItem('isAdmin') === 'true') {
             const session = JSON.parse(localStorage.getItem('adminSession') || '{}');
             if (session.email) {
-                window.location.href = 'admin-dashboard.html';
+                window.location.href = "{% url 'admin_dashboard' %}";
             }
         }
 

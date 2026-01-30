@@ -97,8 +97,12 @@ document.addEventListener('DOMContentLoaded', function() {
             const drinkCard = this.closest('.drink-card');
             const drinkName = drinkCard.querySelector('.drink-name').textContent;
             
-            // Show alert for now - can be replaced with modal or navigation
-            alert(`Viewing more options for: ${drinkName}\n\nThis feature will show detailed coffee variations within this category.`);
+            // Open the menu modal to show detailed coffee variations
+            const menuModal = document.getElementById('menuModal');
+            if (menuModal) {
+                menuModal.style.display = 'block';
+                document.body.style.overflow = 'hidden';
+            }
         });
     });
     

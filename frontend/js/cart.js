@@ -223,7 +223,7 @@ class CartManager {
 
         // Redirect after 3 seconds
         setTimeout(() => {
-            window.location.href = 'login.html';
+            window.location.href = '/login/';
         }, 3000);
     }
 }
