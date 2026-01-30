@@ -4,6 +4,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <meta name="csrf-token" content="">
     <link rel="icon" href="logo.png" type="image/png">
     <title>Login - CoffeeKaafiHai</title>
     
@@ -17,6 +18,9 @@
     
     <!-- Font Awesome -->
     <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.5.1/css/all.min.css">
+    
+    <!-- Auth API Integration -->
+    <script src="../../js/auth-api-integration.js"></script>
     
     <style>
         :root {
@@ -816,7 +820,7 @@
             }
         }
         
-        document.getElementById('loginForm').addEventListener('submit', function(e) {
+        document.getElementById('loginForm').addEventListener('submit', async function(e) {
             e.preventDefault();
             
             // Check rate limiting
@@ -846,56 +850,48 @@
             loginBtn.disabled = true;
             loginBtn.classList.add('loading');
             
-            // Simulate API call with timeout
-            setTimeout(() => {
-                // Check if user exists in users database
-                const users = JSON.parse(localStorage.getItem('users') || '{}');
+            try {
+                // Send login request to Django backend
+                const response = await authAPI.handleLogin(email, password);
                 
-                if (users[email]) {
-                    // Successful login
-                    loginAttempts = 0;
+                // Successful login
+                loginAttempts = 0;
+                if (rememberMe) {
                     createSession(email, rememberMe);
-                    
-                    // Set current user and login status
-                    localStorage.setItem('currentUser', email);
-                    localStorage.setItem('isLoggedIn', 'true');
-                    
-                    // Load user data to global keys for compatibility
-                    const user = users[email];
-                    localStorage.setItem('userFirstName', user.firstName);
-                    localStorage.setItem('userLastName', user.lastName);
-                    localStorage.setItem('userEmail', email);
-                    localStorage.setItem('userPhone', user.phone);
-                    localStorage.setItem('name', user.firstName + ' ' + user.lastName);
-                    localStorage.setItem('email', email);
-                    localStorage.setItem('phone', user.phone);
-                    
-                    // Clear any old global profile data
-                    localStorage.removeItem('userProfile');
-                    
-                    showToast('Login successful! Welcome back!', 'success');
-                    
-                    setTimeout(() => {
-                        window.location.href = 'index.html';
-                    }, 1500);
-                } else {
-                    // Failed login
-                    loginAttempts++;
-                    lastAttemptTime = Date.now();
-                    
-                    loginBtn.disabled = false;
-                    loginBtn.classList.remove('loading');
-                    
-                    const remainingAttempts = MAX_ATTEMPTS - loginAttempts;
-                    if (remainingAttempts > 0) {
-                        showToast(`Invalid email or password. ${remainingAttempts} attempts remaining.`, 'error');
-                    } else {
-                        showToast('Account temporarily locked due to too many failed attempts.', 'error');
-                    }
-                    
-                    document.getElementById('password').value = '';
                 }
-            }, 1500);
+                
+                // Load user data to global keys for compatibility
+                if (response.user) {
+                    localStorage.setItem('name', response.user.firstName + ' ' + response.user.lastName);
+                    localStorage.setItem('phone', response.user.lastName); // Assuming lastName for phone? Adjust if needed
+                }
+                
+                // Clear any old global profile data
+                localStorage.removeItem('userProfile');
+                
+                showToast('Login successful! Welcome back!', 'success');
+                
+                setTimeout(() => {
+                    window.location.href = '/';
+                }, 1500);
+                
+            } catch (error) {
+                // Failed login
+                loginAttempts++;
+                lastAttemptTime = Date.now();
+                
+                loginBtn.disabled = false;
+                loginBtn.classList.remove('loading');
+                
+                const remainingAttempts = MAX_ATTEMPTS - loginAttempts;
+                if (remainingAttempts > 0) {
+                    showToast(`${error.message} (${remainingAttempts} attempts remaining)`, 'error');
+                } else {
+                    showToast('Account temporarily locked due to too many failed attempts.', 'error');
+                }
+                
+                document.getElementById('password').value = '';
+            }
         });
         
         // Keyboard navigation support

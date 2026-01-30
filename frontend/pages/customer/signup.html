@@ -4,6 +4,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <meta name="csrf-token" content="">
     <link rel="icon" href="logo.png" type="image/png">
     <title>Sign Up - CoffeeKaafiHai</title>
     
@@ -17,6 +18,9 @@
     
     <!-- Font Awesome -->
     <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.5.1/css/all.min.css">
+    
+    <!-- Auth API Integration -->
+    <script src="../../js/auth-api-integration.js"></script>
     
     <style>
         :root {
@@ -966,7 +970,7 @@
             return isValid;
         }
         
-        document.getElementById('signupForm').addEventListener('submit', function(e) {
+        document.getElementById('signupForm').addEventListener('submit', async function(e) {
             e.preventDefault();
             
             if (!validateForm()) {
@@ -988,40 +992,37 @@
             const lastName = sanitizeInput(document.getElementById('lastName').value.trim());
             const email = sanitizeInput(document.getElementById('email').value.trim());
             const phone = sanitizeInput(document.getElementById('phone').value.trim());
+            const password = document.getElementById('password').value;
             const signupBtn = document.getElementById('signupBtn');
             
             // Show loading state
             signupBtn.disabled = true;
             signupBtn.classList.add('loading');
             
-            // Simulate API call
-            setTimeout(() => {
-                // Store user in users database
-                const users = JSON.parse(localStorage.getItem('users') || '{}');
-                users[email] = {
+            try {
+                // Send signup request to Django backend
+                const response = await authAPI.handleSignup({
                     firstName: firstName,
                     lastName: lastName,
-                    phone: phone
-                };
-                localStorage.setItem('users', JSON.stringify(users));
-                
-                // Set current user and login status
-                localStorage.setItem('currentUser', email);
-                localStorage.setItem('isLoggedIn', 'true');
-                localStorage.setItem('userEmail', email); // for login compatibility
-                
-                // Clear old login session
-                sessionStorage.removeItem('loginSession');
+                    email: email,
+                    phone: phone,
+                    password: password
+                });
                 
                 // Clear the form data from sessionStorage after successful signup
                 clearFormData();
                 
-                showToast('Account created successfully! Please login to continue.', 'success');
+                showToast('Account created successfully! Redirecting to login...', 'success');
                 
                 setTimeout(() => {
                     window.location.href = 'login.html';
                 }, 2000);
-            }, 1500);
+                
+            } catch (error) {
+                signupBtn.disabled = false;
+                signupBtn.classList.remove('loading');
+                showToast(error.message, 'error');
+            }
         });
         
         // Real-time validation on blur
