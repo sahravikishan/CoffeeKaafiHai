@@ -309,6 +309,15 @@ class CheckoutManager {
     }
 
     open() {
+        const isLoggedIn = localStorage.getItem('isLoggedIn') === 'true';
+        if (!isLoggedIn) {
+            if (window.cartManager && typeof window.cartManager.showLoginRequiredModal === 'function') {
+                window.cartManager.showLoginRequiredModal();
+            } else if (window.cartManager && typeof window.cartManager.showToast === 'function') {
+                window.cartManager.showToast('Please log in to place orders.', 'warning');
+            }
+            return;
+        }
         const cart = cartManager.getCart();
         if (cart.length === 0) {
             if (window.showToast) window.showToast('Your cart is empty!', 'warning'); 
@@ -319,21 +328,22 @@ class CheckoutManager {
         // Clear all errors
         this.clearAllErrors();
         
-        // Reset address-only fields (preserve name/phone if profile exists)
-        this.forceResetAddressForm();
-        // Load name/phone/address from saved profile or signup values
-        this.loadFullUserInfo();
-        
+        // FORCE CLEAR ALL ADDRESS FIELDS - Fix for Issue 2
+        this.forceResetAllFields();
+
+        // Load name/phone from saved profile or signup values (but NOT address)
+        this.loadUserBasicInfo();
+
         // Reset to step 1
         this.currentStep = 1;
         this.showStep(1);
-        
+
         // Reset order type to delivery
         this.orderType = 'delivery';
         const deliveryRadio = document.querySelector('input[name="orderType"][value="delivery"]');
         if (deliveryRadio) deliveryRadio.checked = true;
         this.toggleAddressStep();
-        
+
         this.checkoutModal.classList.add('checkout-modal-active');
         document.body.style.overflow = 'hidden';
     }
@@ -345,8 +355,8 @@ class CheckoutManager {
         this.clearAllErrors();
     }
 
-    forceResetAddressForm() {
-        // AGGRESSIVE CLEAR: Set value to empty string AND remove any cached values
+    forceResetAllFields() {
+        // AGGRESSIVE CLEAR: Clear ALL address-related fields completely
         const addressFields = ['addressLine', 'city', 'pincode', 'landmark'];
 
         addressFields.forEach(fieldId => {
@@ -355,37 +365,16 @@ class CheckoutManager {
                 el.value = '';
                 el.defaultValue = '';
                 el.setAttribute('value', '');
+                // Force DOM update
+                el.dispatchEvent(new Event('input', { bubbles: true }));
             }
         });
-
-        // Do NOT clear name/phone here — keep synced data when available
     }
 
-    loadBasicUserInfo() {
-        // Legacy loader: load name/phone from signup keys
-        const firstName = localStorage.getItem('userFirstName') || '';
-        const lastName = localStorage.getItem('userLastName') || '';
-        const phone = localStorage.getItem('userPhone') || '';
-
-        const fullNameEl = document.getElementById('fullName');
-        const phoneEl = document.getElementById('phoneNumber');
-
-        if (fullNameEl && (firstName || lastName)) {
-            fullNameEl.value = `${firstName} ${lastName}`.trim();
-        }
-        if (phoneEl && phone) {
-            const cleanPhone = String(phone).replace(/[^0-9]/g, '');
-            phoneEl.value = cleanPhone;
-        }
-    }
-
-    loadFullUserInfo() {
-        // First, load from legacy signup keys
-        this.loadBasicUserInfo();
-
-        // Get current user
+    loadUserBasicInfo() {
+        // Load ONLY name and phone - NOT address fields
         const currentUser = localStorage.getItem('currentUser');
-        
+
         // Try to load from user-specific profile first
         let profile = null;
         if (currentUser) {
@@ -395,7 +384,7 @@ class CheckoutManager {
                 profile = null;
             }
         }
-        
+
         // Fallback to global userProfile
         if (!profile) {
             try {
@@ -407,10 +396,6 @@ class CheckoutManager {
 
         const fullNameEl = document.getElementById('fullName');
         const phoneEl = document.getElementById('phoneNumber');
-        const addressEl = document.getElementById('addressLine');
-        const cityEl = document.getElementById('city');
-        const pincodeEl = document.getElementById('pincode');
-        const landmarkEl = document.getElementById('landmark');
 
         if (profile) {
             const name = `${profile.firstName || ''} ${profile.lastName || ''}`.trim();
@@ -420,14 +405,6 @@ class CheckoutManager {
                 const cleanPhone = String(profile.phone).replace(/[^0-9]/g, '');
                 if (cleanPhone.length >= 10) phoneEl.value = cleanPhone;
             }
-            if (addressEl && profile.address) addressEl.value = profile.address;
-            if (cityEl && profile.city) cityEl.value = profile.city;
-            if (pincodeEl && profile.pincode) {
-                // Clean pincode - remove any non-digits
-                const cleanPincode = String(profile.pincode).replace(/[^0-9]/g, '');
-                if (cleanPincode.length === 6) pincodeEl.value = cleanPincode;
-            }
-            if (landmarkEl && profile.landmark) landmarkEl.value = profile.landmark;
             return;
         }
 
@@ -436,7 +413,7 @@ class CheckoutManager {
             try {
                 const users = JSON.parse(localStorage.getItem('users') || '{}');
                 const userData = users[currentUser];
-                
+
                 if (userData) {
                     const name = `${userData.firstName || ''} ${userData.lastName || ''}`.trim();
                     if (fullNameEl && name) fullNameEl.value = name;
@@ -449,6 +426,19 @@ class CheckoutManager {
             } catch (e) {
                 console.warn('Failed to load from users database:', e);
             }
+        }
+
+        // Final fallback to legacy signup keys
+        const firstName = localStorage.getItem('userFirstName') || '';
+        const lastName = localStorage.getItem('userLastName') || '';
+        const phone = localStorage.getItem('userPhone') || '';
+
+        if (fullNameEl && (firstName || lastName)) {
+            fullNameEl.value = `${firstName} ${lastName}`.trim();
+        }
+        if (phoneEl && phone) {
+            const cleanPhone = String(phone).replace(/[^0-9]/g, '');
+            phoneEl.value = cleanPhone;
         }
     }
 
@@ -551,14 +541,14 @@ class CheckoutManager {
         const nextBtn = document.getElementById('proceedToPayment');
         const backBtn = document.getElementById('backToAddress');
         const placeBtn = document.getElementById('placeOrderBtn');
-        
+
         if (step === 1) {
             if (step1) {
                 step1.classList.add('active');
                 step1.classList.remove('completed');
             }
             if (step2) step2.classList.remove('active');
-            
+
             if (addressStep) {
                 addressStep.classList.add('active');
                 addressStep.style.display = 'block';
@@ -567,14 +557,14 @@ class CheckoutManager {
                 paymentStep.classList.remove('active');
                 paymentStep.style.display = 'none';
             }
-            
+
             if (nextBtn) nextBtn.style.display = 'flex';
             if (backBtn) backBtn.style.display = 'none';
             if (placeBtn) placeBtn.style.display = 'none';
         } else {
             if (step1) step1.classList.add('active', 'completed');
             if (step2) step2.classList.add('active');
-            
+
             if (addressStep) {
                 addressStep.classList.remove('active');
                 addressStep.style.display = 'none';
@@ -583,7 +573,7 @@ class CheckoutManager {
                 paymentStep.classList.add('active');
                 paymentStep.style.display = 'block';
             }
-            
+
             if (nextBtn) nextBtn.style.display = 'none';
             if (backBtn) backBtn.style.display = 'flex';
             if (placeBtn) placeBtn.style.display = 'flex';
@@ -593,21 +583,21 @@ class CheckoutManager {
     renderOrderSummary() {
         const cart = cartManager.getCart();
         const container = document.getElementById('checkoutOrderSummary');
-        
+
         // MATCH CART UI DESIGN: Use same card layout as cart sidebar
         container.innerHTML = cart.map(item => {
             const qty = Number(item.quantity || 0);
             const price = Number(item.price || 0);
-            const sizeText = (item.size && typeof item.size === 'string') 
-                ? (item.size.charAt(0).toUpperCase() + item.size.slice(1)) 
+            const sizeText = (item.size && typeof item.size === 'string')
+                ? (item.size.charAt(0).toUpperCase() + item.size.slice(1))
                 : (item.size || 'N/A');
-            const imgSrc = item.image || '/images/CartItem.jpg';
-            
+            const imgSrc = item.image || '/images/Cart.jpg';
+
             // EXACT SAME STRUCTURE AS CART UI
             return `
                 <div class="cart-item" style="border-bottom: 1px solid rgba(0,0,0,0.06); padding: 12px 0;">
                     <div class="cart-item-image">
-                        <img src="${imgSrc}" alt="${item.name}" style="width:72px; height:72px; object-fit:cover; border-radius:8px;" onerror="this.onerror=null;this.src='/images/CartItem.jpg'">
+                        <img src="${imgSrc}" alt="${item.name}" style="width:72px; height:72px; object-fit:cover; border-radius:8px;" onerror="this.onerror=null;this.src='/images/Cart.jpg'">
                     </div>
                     <div class="cart-item-details" style="flex:1;">
                         <h4 class="cart-item-name" style="margin:0 0 4px 0; font-weight:600;">${item.name}</h4>
@@ -620,7 +610,7 @@ class CheckoutManager {
                 </div>
             `;
         }).join('');
-        
+
         document.getElementById('checkoutSubtotal').textContent = `₹${cartManager.getSubtotal()}`;
         document.getElementById('checkoutTax').textContent = `₹${cartManager.getTax()}`;
         document.getElementById('checkoutGrandTotal').textContent = `₹${cartManager.getTotal()}`;
@@ -628,7 +618,7 @@ class CheckoutManager {
 
     async placeOrder() {
         const paymentMethod = this.selectedPaymentMethod || 'razorpay';
-        
+
         if (paymentMethod === 'razorpay') {
             this.initiateRazorpayPayment();
         } else if (paymentMethod === 'cod') {
@@ -648,7 +638,7 @@ class CheckoutManager {
         const subtotal = cartManager.getSubtotal();
         const tax = cartManager.getTax();
         const orderId = this.generateOrderId();
-        
+
         const fullName = document.getElementById('fullName').value.trim();
         const email = localStorage.getItem('userEmail') || 'customer@coffeekaafihai.com';
         const phone = document.getElementById('phoneNumber').value.trim();
@@ -685,7 +675,7 @@ class CheckoutManager {
         const order = this.createOrder(orderId, 'razorpay', 'paid', paymentData);
         this.saveOrder(order);
         cartManager.clearCart();
-        
+
         // Success is handled by Razorpay Gateway status modal
         // No need to show additional confirmation here
     }
@@ -709,6 +699,8 @@ class CheckoutManager {
             paymentMethod: paymentMethod,
             paymentStatus: paymentStatus,
             orderDate: new Date().toISOString(),
+            date: new Date().toISOString(),
+            dateDisplay: new Date().toLocaleString(),
             status: 'pending',
             deliveryAddress: this.deliveryAddress,
             orderType: this.orderType
@@ -730,9 +722,14 @@ class CheckoutManager {
                 addNewOrder(order);
                 return;
             }
-            const orders = JSON.parse(localStorage.getItem('coffeeOrders') || '[]');
-            orders.unshift(order);
-            localStorage.setItem('coffeeOrders', JSON.stringify(orders));
+
+            // Fallback: save to per-user orders
+            const userId = localStorage.getItem('currentUser') || localStorage.getItem('userId') || localStorage.getItem('userEmail');
+            if (userId) {
+                const orders = JSON.parse(localStorage.getItem(`orders_${userId}`) || '[]');
+                orders.unshift(order);
+                localStorage.setItem(`orders_${userId}`, JSON.stringify(orders));
+            }
         } catch (e) {
             console.error('saveOrder: failed to persist order', e);
         }
@@ -815,4 +812,3 @@ class CheckoutManager {
 
 // Initialize checkout manager
 const checkoutManager = new CheckoutManager();
-

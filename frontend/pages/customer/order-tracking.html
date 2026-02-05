@@ -566,7 +566,33 @@
 
         // Load and display orders
         function loadOrders() {
-            try { if (ordersManager && typeof ordersManager.loadOrders === 'function') ordersManager.loadOrders(); } catch (e) {}
+            // FIX ISSUE 3: Ensure ordersManager is properly initialized
+            if (!window.ordersManager) {
+                console.error('ordersManager not initialized');
+                const container = document.getElementById('ordersContainer');
+                if (container) {
+                    container.innerHTML = `
+                        <div class="empty-state">
+                            <i class="fas fa-exclamation-circle"></i>
+                            <h3>Error Loading Orders</h3>
+                            <p>Please refresh the page to try again.</p>
+                            <button class="btn-back" onclick="window.location.reload()">
+                                <i class="fas fa-sync"></i> Refresh Page
+                            </button>
+                        </div>
+                    `;
+                }
+                return;
+            }
+
+            try {
+                if (ordersManager && typeof ordersManager.loadOrders === 'function') {
+                    ordersManager.loadOrders();
+                }
+            } catch (e) {
+                console.error('Error loading orders:', e);
+            }
+
             const params = new URLSearchParams(window.location.search);
             const focusOrderId = params.get('orderId');
             const all = ordersManager.getOrders();
@@ -589,13 +615,13 @@
 
             container.innerHTML = orders.map(order => renderOrderCard(order, focusOrderId)).join('');
             attachEventListeners();
-            
+
             // Initialize map for the first active order
             const activeOrder = orders.find(o => o.status !== 'delivered' && o.status !== 'cancelled');
             if (activeOrder) {
                 setTimeout(() => initializeMap(activeOrder), 500);
             }
-            
+
             if (focusOrderId) {
                 setTimeout(() => {
                     const highlightedCard = document.querySelector('.order-card.highlighted');
@@ -610,7 +636,7 @@
         function initializeMap(order) {
             // Find the map element for this specific order
             const mapElement = document.querySelector(`#map-${order.orderId}`);
-            
+
             if (!mapElement || !window.google) {
                 console.warn(`Map element not found for order ${order.orderId} or Google Maps not loaded`);
                 return;
@@ -618,7 +644,7 @@
 
             // Parse delivery address to get coordinates (simplified - in production, use Geocoding API)
             const customerLocation = getCustomerLocation(order);
-            
+
             // Initialize map centered between store and customer
             const centerLat = (STORE_LOCATION.lat + customerLocation.lat) / 2;
             const centerLng = (STORE_LOCATION.lng + customerLocation.lng) / 2;
@@ -754,7 +780,7 @@
                 const newLng = STORE_LOCATION.lng + (targetPosition.lng - STORE_LOCATION.lng) * progress;
 
                 currentDeliveryPosition = { lat: newLat, lng: newLng };
-                
+
                 // Update marker position
                 if (deliveryMarker) {
                     deliveryMarker.setPosition(currentDeliveryPosition);
@@ -803,7 +829,7 @@
                 dateStyle: 'medium',
                 timeStyle: 'short'
             });
-            
+
             const isHighlighted = focusOrderId && (order.orderId === focusOrderId || order.id === focusOrderId);
             const highlightClass = isHighlighted ? 'highlighted' : '';
 
@@ -860,7 +886,7 @@
                         <h4><i class="fas fa-coffee"></i> Items:</h4>
                         ${order.items.map(item => `
                             <div class="order-item">
-                                <img src="${item.image || '/images/photo1767513519.jpg'}" alt="${item.name}" class="order-item-image" onerror="this.onerror=null;this.src='/images/photo1767513519.jpg'">
+                                <img src="${item.image || '/images/Coffee.jpg'}" alt="${item.name}" class="order-item-image" onerror="this.onerror=null;this.src='/images/Coffee.jpg'">
                                 <div class="order-item-details">
                                     <div class="order-item-name">${item.name}</div>
                                     <div class="order-item-info">Size: ${item.size} | Qty: ${item.quantity} | ₹${item.price * item.quantity}</div>
@@ -967,7 +993,7 @@
         // Confirm cancellation
         function confirmCancellation() {
             const reason = document.getElementById('cancelReason').value.trim();
-            
+
             if (!reason) {
                 if (typeof showToast === 'function') {
                     showToast('Please provide a reason for cancellation', 'warning');
@@ -978,7 +1004,7 @@
             }
 
             const result = ordersManager.cancelOrder(currentOrderId, reason);
-            
+
             if (result.success) {
                 closeCancelModal();
                 if (updateInterval) {
@@ -1025,7 +1051,35 @@
                 return;
             }
 
-            // If logged in, load orders
-            loadOrders();
+            // Wait for ordersManager to be ready before loading orders
+            if (typeof ordersManager !== 'undefined' && ordersManager) {
+                loadOrders();
+            } else {
+                // Retry after a short delay if ordersManager is not ready
+                setTimeout(() => {
+                    if (typeof ordersManager !== 'undefined' && ordersManager) {
+                        loadOrders();
+                    } else {
+                        console.error('ordersManager still not available after delay');
+                        const container = document.getElementById('ordersContainer');
+                        if (container) {
+                            container.innerHTML = `
+                                <div class="empty-state">
+                                    <i class="fas fa-exclamation-circle"></i>
+                                    <h3>Error Loading Orders</h3>
+                                    <p>Please refresh the page to try again.</p>
+                                    <button class="btn-back" onclick="window.location.reload()">
+                                        <i class="fas fa-sync"></i> Refresh Page
+                                    </button>
+                                </div>
+                            `;
+                        }
+                    }
+                }, 500);
+            }
         });
-        
+
+    </script>
+</body>
+</html>
+

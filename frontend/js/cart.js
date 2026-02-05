@@ -6,6 +6,13 @@ class CartManager {
         this.cartCount = 0;
         this.loadCartForUser();
         this.updateCartCount();
+
+        // Listen for logout events to clear cart
+        window.addEventListener('storage', (e) => {
+            if (e.key === 'isLoggedIn' && e.newValue === 'false') {
+                this.clearCart();
+            }
+        });
     }
 
     // Add item to cart
@@ -17,7 +24,7 @@ class CartManager {
             this.showLoginRequiredModal();
             return false; // Indicate not added
         }
-        
+
         const existingItemIndex = this.cart.findIndex(
             cartItem => cartItem.id === item.id && cartItem.size === size
         );
@@ -55,7 +62,7 @@ class CartManager {
 
         if (itemIndex > -1) {
             this.cart[itemIndex].quantity += change;
-            
+
             if (this.cart[itemIndex].quantity <= 0) {
                 this.removeFromCart(itemId, size);
             } else {
@@ -80,6 +87,9 @@ class CartManager {
         this.cart = [];
         this.updateCartCount();
         this.notifyCartUpdate();
+
+        // Note: Do not delete stored carts from localStorage here.
+        // We clear only in-memory cart so users or guests can retain stored cart across sessions.
     }
 
     // Get cart items
@@ -127,32 +137,47 @@ class CartManager {
 
     // Notify cart update (for UI refresh)
     notifyCartUpdate() {
-        window.dispatchEvent(new CustomEvent('cartUpdated', { 
-            detail: { cart: this.cart, count: this.cartCount } 
+        window.dispatchEvent(new CustomEvent('cartUpdated', {
+            detail: { cart: this.cart, count: this.cartCount }
         }));
         // Persist cart only for logged-in users
         try {
-            const userId = localStorage.getItem('userId') || localStorage.getItem('userEmail');
+            const userId = localStorage.getItem('userId') || localStorage.getItem('userEmail') || localStorage.getItem('currentUser');
             const isLoggedIn = localStorage.getItem('isLoggedIn') === 'true';
             if (userId && isLoggedIn) {
                 localStorage.setItem(`cart_${userId}`, JSON.stringify(this.cart));
+            } else {
+                // Persist guest cart so users returning to the site keep their selections
+                localStorage.setItem('cart_guest', JSON.stringify(this.cart));
             }
-            // Do not persist guest cart
         } catch (e) { /* ignore */ }
     }
 
     loadCartForUser() {
         try {
-            const userId = localStorage.getItem('userId') || localStorage.getItem('userEmail');
+            const userId = localStorage.getItem('userId') || localStorage.getItem('userEmail') || localStorage.getItem('currentUser');
             const isLoggedIn = localStorage.getItem('isLoggedIn') === 'true';
             if (userId && isLoggedIn) {
                 const data = localStorage.getItem(`cart_${userId}`);
                 if (data) {
                     try { this.cart = JSON.parse(data) || []; } catch (e) { this.cart = []; }
+                } else {
+                    // Fallback to guest cart if user had no saved cart
+                    const guestData = localStorage.getItem('cart_guest');
+                    if (guestData) {
+                        try { this.cart = JSON.parse(guestData) || []; } catch (e) { this.cart = []; }
+                    } else {
+                        this.cart = [];
+                    }
                 }
             } else {
-                // No cart for guests - start empty
-                this.cart = [];
+                // Load guest cart if present
+                const guestData = localStorage.getItem('cart_guest');
+                if (guestData) {
+                    try { this.cart = JSON.parse(guestData) || []; } catch (e) { this.cart = []; }
+                } else {
+                    this.cart = [];
+                }
             }
         } catch (e) { this.cart = []; }
     }
@@ -233,5 +258,4 @@ const cartManager = new CartManager();
 
 // Expose for other scripts/tests
 window.cartManager = cartManager;
-
 

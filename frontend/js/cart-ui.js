@@ -219,6 +219,15 @@ class CartUI {
         const checkoutBtn = document.getElementById('proceedToCheckout');
         if (checkoutBtn) {
             checkoutBtn.addEventListener('click', () => {
+                const isLoggedIn = localStorage.getItem('isLoggedIn') === 'true';
+                if (!isLoggedIn) {
+                    if (window.cartManager && typeof window.cartManager.showLoginRequiredModal === 'function') {
+                        window.cartManager.showLoginRequiredModal();
+                    } else if (window.cartManager && typeof window.cartManager.showToast === 'function') {
+                        window.cartManager.showToast('Please log in to place orders.', 'warning');
+                    }
+                    return;
+                }
                 let currentCart = [];
                 try { if (window.cartManager && typeof window.cartManager.getCart === 'function') currentCart = window.cartManager.getCart(); } catch (e) { currentCart = []; }
                 if (!currentCart || currentCart.length === 0) {

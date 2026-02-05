@@ -142,6 +142,18 @@ async function handleSignup(formData) {
             } catch (e) {
                 console.warn('signup: failed to persist additional client-side user info', e);
             }
+            
+            // CRITICAL FIX: Reinitialize managers after currentUser is set
+            try {
+                if (typeof cartManager !== 'undefined' && cartManager.reloadCart) {
+                    cartManager.reloadCart();
+                }
+                if (typeof ordersManager !== 'undefined' && ordersManager.reinit) {
+                    ordersManager.reinit();
+                }
+            } catch (e) {
+                console.warn('signup: failed to reinit managers', e);
+            }
         }
 
         localStorage.setItem('isLoggedIn', 'true');
@@ -169,15 +181,123 @@ async function handleLogin(email, password) {
             localStorage.setItem('refreshToken', response.refreshToken);
         }
         
-        // Store user info
+        // Store user info and persist profile fallback (phone + profile)
         if (response.user) {
             localStorage.setItem('userEmail', response.user.email);
             localStorage.setItem('userFirstName', response.user.firstName);
             localStorage.setItem('userLastName', response.user.lastName);
+            localStorage.setItem('userPhone', response.user.phone || '');
+
+            try {
+                const users = JSON.parse(localStorage.getItem('users') || '{}');
+                users[response.user.email] = users[response.user.email] || {};
+                users[response.user.email].firstName = response.user.firstName || users[response.user.email].firstName || '';
+                users[response.user.email].lastName = response.user.lastName || users[response.user.email].lastName || '';
+                users[response.user.email].phone = response.user.phone || users[response.user.email].phone || '';
+                try { localStorage.setItem('users', JSON.stringify(users)); } catch(e) { /* ignore storage errors */ }
+
+                const profileKey = `userProfile_${response.user.email}`;
+                // If backend provided a full profile, use it. Otherwise create starter profile.
+                try {
+                    const profileResp = await apiRequest(`/auth/profile/?email=${encodeURIComponent(response.user.email)}`, 'GET');
+                    if (profileResp && profileResp.success && profileResp.user) {
+                        const serverUser = profileResp.user;
+                        const profileToSave = {
+                            firstName: serverUser.firstName || response.user.firstName || '',
+                            lastName: serverUser.lastName || response.user.lastName || '',
+                            email: serverUser.email || response.user.email || '',
+                            phone: serverUser.phone || response.user.phone || '',
+                            coffeePreferences: serverUser.coffeePreferences || {},
+                            avatar: serverUser.avatar || response.user.avatar || `https://ui-avatars.com/api/?name=${encodeURIComponent((response.user.firstName||'') + ' ' + (response.user.lastName||''))}&size=200&background=D2691E&color=fff&bold=true`,
+                            memberSince: serverUser.memberSince || new Date().toLocaleString('en-US', { month: 'long', year: 'numeric' })
+                        };
+                        try { localStorage.setItem(profileKey, JSON.stringify(profileToSave)); } catch(e) { /* ignore */ }
+                        try {
+                            const avatar = String(profileToSave.avatar || '');
+                            const uploaded = !!avatar && !avatar.includes('ui-avatars.com') && !avatar.includes('/static/images/logo.png');
+                            localStorage.setItem(`userHasUploadedAvatar_${response.user.email}`, uploaded ? 'true' : 'false');
+                        } catch (e) { /* ignore */ }
+                    } else {
+                        if (!localStorage.getItem(profileKey)) {
+                            const starterProfile = {
+                                firstName: response.user.firstName || '',
+                                lastName: response.user.lastName || '',
+                                email: response.user.email || '',
+                                phone: response.user.phone || '',
+                                coffeePreferences: {},
+                                avatar: response.user.avatar || `https://ui-avatars.com/api/?name=${encodeURIComponent((response.user.firstName||'') + ' ' + (response.user.lastName||''))}&size=200&background=D2691E&color=fff&bold=true`,
+                                memberSince: new Date().toLocaleString('en-US', { month: 'long', year: 'numeric' })
+                            };
+                            try { localStorage.setItem(profileKey, JSON.stringify(starterProfile)); } catch(e) { /* ignore */ }
+                            try { localStorage.setItem(`userHasUploadedAvatar_${response.user.email}`, 'false'); } catch (e) { /* ignore */ }
+                        }
+                    }
+                } catch (e) {
+                    // If profile fetch fails, fallback to starter profile behavior
+                    if (!localStorage.getItem(profileKey)) {
+                        const starterProfile = {
+                            firstName: response.user.firstName || '',
+                            lastName: response.user.lastName || '',
+                            email: response.user.email || '',
+                            phone: response.user.phone || '',
+                            coffeePreferences: {},
+                            avatar: response.user.avatar || `https://ui-avatars.com/api/?name=${encodeURIComponent((response.user.firstName||'') + ' ' + (response.user.lastName||''))}&size=200&background=D2691E&color=fff&bold=true`,
+                            memberSince: new Date().toLocaleString('en-US', { month: 'long', year: 'numeric' })
+                        };
+                        try { localStorage.setItem(profileKey, JSON.stringify(starterProfile)); } catch(e) { /* ignore */ }
+                        try { localStorage.setItem(`userHasUploadedAvatar_${response.user.email}`, 'false'); } catch (e) { /* ignore */ }
+                    }
+                    console.warn('login: profile fetch failed', e);
+                }
+            } catch (e) {
+                console.warn('login: failed to persist additional client-side user info', e);
+            }
         }
-        
+
         localStorage.setItem('currentUser', email);
         localStorage.setItem('isLoggedIn', 'true');
+
+        // Fetch orders from backend and persist locally so order history is available
+        try {
+            const ordersResp = await getUserOrders();
+            if (ordersResp && ordersResp.success && Array.isArray(ordersResp.orders)) {
+                try {
+                    localStorage.setItem(`orders_${email}`, JSON.stringify(ordersResp.orders));
+                } catch (e) { console.warn('Failed to persist orders locally', e); }
+            }
+        } catch (e) {
+            console.warn('Failed to fetch/persist orders on login', e);
+        }
+        
+        // CRITICAL FIX: Reinitialize managers after login to load correct user data
+        try {
+            if (typeof cartManager !== 'undefined' && cartManager.reloadCart) {
+                cartManager.reloadCart();
+            }
+            if (typeof ordersManager !== 'undefined' && ordersManager.reinit) {
+                ordersManager.reinit();
+            }
+        } catch (e) {
+            console.warn('login: failed to reinit managers', e);
+        }
+        
+        // PERMANENT FIX: Reset and reload user profile from saved localStorage data
+        try {
+            if (typeof window !== 'undefined' && window.DynamicProfileManager) {
+                // Reset the in-memory profile to force fresh load from localStorage
+                window.userProfileData = null;
+                // Reload the saved profile for the logged-in user
+                if (typeof window.DynamicProfileManager.initializeUserProfile === 'function') {
+                    window.userProfileData = window.DynamicProfileManager.initializeUserProfile();
+                    // Update UI with loaded profile
+                    if (typeof window.DynamicProfileManager.updateProfileDisplay === 'function') {
+                        window.DynamicProfileManager.updateProfileDisplay();
+                    }
+                }
+            }
+        } catch (e) {
+            console.warn('login: failed to reload user profile', e);
+        }
         
         return response;
         
@@ -382,14 +502,21 @@ function isAuthenticated() {
 /**
  * Logout user
  */
-function logout() {
-    localStorage.removeItem('accessToken');
-    localStorage.removeItem('refreshToken');
-    localStorage.removeItem('isLoggedIn');
-    localStorage.removeItem('currentUser');
-    localStorage.removeItem('userEmail');
-    localStorage.removeItem('userFirstName');
-    localStorage.removeItem('userLastName');
+async function logout() {
+    try {
+        await apiRequest('/auth/logout/', 'POST', {});
+    } catch (e) {
+        console.warn('logout: server logout failed', e);
+    } finally {
+        localStorage.removeItem('accessToken');
+        localStorage.removeItem('refreshToken');
+        localStorage.removeItem('isLoggedIn');
+        localStorage.removeItem('currentUser');
+        localStorage.removeItem('userEmail');
+        localStorage.removeItem('userFirstName');
+        localStorage.removeItem('userLastName');
+        localStorage.removeItem('userPhone');
+    }
 }
 
 /**

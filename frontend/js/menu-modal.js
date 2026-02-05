@@ -22,7 +22,7 @@ class MenuModal {
                 <div class="menu-modal-content">
                     <div class="menu-modal-header">
                         <h2 id="menuModalTitle" class="menu-modal-title"></h2>
-                        <button class="menu-modal-close" id="closeMenuModal" aria-label="Close modal">
+                        <button type="button" class="menu-modal-close" id="closeMenuModal" aria-label="Close modal">
                             <i class="fas fa-times"></i>
                         </button>
                     </div>
@@ -31,93 +31,146 @@ class MenuModal {
                 </div>
             </div>
         `;
-        
+
         document.body.insertAdjacentHTML('beforeend', modalHTML);
         this.modal = document.getElementById('menuModal');
-        
-        // Close button
-        document.getElementById('closeMenuModal').addEventListener('click', () => this.close());
-        
-        // Click overlay to close
-        this.modal.querySelector('.menu-modal-overlay').addEventListener('click', () => this.close());
-        
+
+        // Store instance globally for onclick
+        window.menuModalInstance = this;
+
+        // Ensure close button is clickable and attach a single listener
+        const closeBtn = this.modal ? this.modal.querySelector('#closeMenuModal') : null;
+        if (closeBtn) {
+            closeBtn.style.pointerEvents = 'auto';
+            closeBtn.style.zIndex = '10002';
+            closeBtn.style.position = 'relative';
+
+            // Ensure the close button closes the modal and fully hides it
+            closeBtn.addEventListener('click', (e) => {
+                e.preventDefault();
+                e.stopPropagation();
+                this.close();
+                // ensure the modal is hidden after animation
+                try {
+                    if (this.modal) this.modal.style.pointerEvents = 'none';
+                    setTimeout(() => {
+                        if (this.modal) this.modal.style.display = 'none';
+                    }, 350);
+                } catch (err) { /* ignore */ }
+            });
+
+            // Make sure hover styles are responsive by ensuring the element is not covered
+            closeBtn.addEventListener('mouseenter', () => {
+                closeBtn.style.pointerEvents = 'auto';
+            });
+        } else {
+            console.error('Close button not found!');
+        }
+
+        // Click overlay to close (safe-guard for missing modal)
+        const overlay = this.modal ? this.modal.querySelector('.menu-modal-overlay') : null;
+        if (overlay) overlay.addEventListener('click', () => this.close());
+
         // ESC key to close
         document.addEventListener('keydown', (e) => {
-            if (e.key === 'Escape' && this.modal.classList.contains('menu-modal-active')) {
+            if (e.key === 'Escape' && this.modal && this.modal.classList.contains('menu-modal-active')) {
                 this.close();
             }
         });
     }
 
     attachButtonListeners() {
-        // Attach to all "View Coffee" buttons
-        const buttons = document.querySelectorAll('.btn-view-coffee');
-        if (!buttons || buttons.length === 0) return;
+        // Use event delegation to handle "View Coffee/Options/Snacks/Biscuits" buttons
+        // This works for both existing and dynamically added buttons
+        document.addEventListener('click', (e) => {
+            const button = e.target.closest('.btn-view-coffee');
+            if (!button) return;
 
-        buttons.forEach(button => {
-            button.addEventListener('click', (e) => {
-                const el = e.currentTarget || e.target;
-                const drinkCard = el.closest ? el.closest('.drink-card') : null;
-                if (!drinkCard) return this.showEnhancedToast('Could not find drink information', 'error');
+            e.preventDefault();
+            e.stopPropagation();
 
-                const nameEl = drinkCard.querySelector('.drink-name');
-                const drinkName = nameEl ? nameEl.textContent.trim() : '';
+            console.log('View button clicked!');
 
-                // Map drink names to category slugs
-                const categoryMap = {
-                    'Espresso Bliss': 'espresso-bliss',
-                    'Milk Brew Classics': 'milk-brew-classics',
-                    'Mocha Magic': 'mocha-magic',
-                    'Caramel Dream & Flavored Delights': 'caramel-dream-flavored',
-                    'Cold Brew Creations': 'cold-brew-creations',
-                    'Special Choices': 'special-choices',
-                    'Chocolate Indulgence (Non-Coffee)': 'chocolate-indulgence',
-                    'Add-Ons & Customization': 'addons-customization',
-                    'Crispy Fried': 'savory-snacks-crispy',
-                    'Fresh & Grilled' : 'sandwiches-fresh-grilled',
-                    'Indian Street Food' : 'savory-snacks-indian-street-food',
-                    'Crunchy & Chewy' : 'biscuits-cookies-crunchy',
-                    'Buttery & Flaky' : 'croissants-pastries-buttery',
-                    'Decadent Chocolate' : 'sweet-treats-decadent',
-                    'Delicate & Creamy' : 'macarons-desserts-delicate',
-                    'Mixed Platter' : 'savory-snacks-mixed-platter',
-                    'Soft & Fluffy' : 'biscuits-cookies-soft-fluffy',
-                    'Crispy & Buttery' : 'croissants-pastries-crispy-buttery',
-                    'Moist & Nutty' : 'sweet-treats-moist-nutty',
-                    'Luxury Assortment' : 'sweet-treats-luxury-assortment',
+            const drinkCard = button.closest('.drink-card');
+            if (!drinkCard) {
+                console.error('Could not find drink-card');
+                return this.showEnhancedToast('Could not find drink information', 'error');
+            }
 
-                };
+            const nameEl = drinkCard.querySelector('.drink-name');
+            const drinkName = nameEl ? nameEl.textContent.trim() : '';
 
-                const categorySlug = categoryMap[drinkName];
-                if (categorySlug) {
-                    this.open(categorySlug);
-                } else {
-                    this.showEnhancedToast('This menu is coming soon!', 'info');
-                }
-            });
+            console.log('Drink name:', drinkName);
+
+            // Map drink names to category slugs
+            const categoryMap = {
+                'Espresso Bliss': 'espresso-bliss',
+                'Milk Brew Classics': 'milk-brew-classics',
+                'Mocha Magic': 'mocha-magic',
+                'Caramel Dream & Flavored Delights': 'caramel-dream-flavored',
+                'Cold Brew Creations': 'cold-brew-creations',
+                'Special Choices': 'special-choices',
+                'Chocolate Indulgence (Non-Coffee)': 'chocolate-indulgence',
+                'Add-Ons & Customization': 'addons-customization',
+                'Crispy Fried': 'savory-snacks-crispy',
+                'Fresh & Grilled' : 'sandwiches-fresh-grilled',
+                'Indian Street Food' : 'savory-snacks-indian-street-food',
+                'Crunchy & Chewy' : 'biscuits-cookies-crunchy',
+                'Buttery & Flaky' : 'croissants-pastries-buttery',
+                'Decadent Chocolate' : 'sweet-treats-decadent',
+                'Delicate & Creamy' : 'macarons-desserts-delicate',
+                'Mixed Platter' : 'savory-snacks-mixed-platter',
+                'Soft & Fluffy' : 'biscuits-cookies-soft-fluffy',
+                'Crispy & Buttery' : 'croissants-pastries-crispy-buttery',
+                'Moist & Nutty' : 'sweet-treats-moist-nutty',
+                'Luxury Assortment' : 'sweet-treats-luxury-assortment',
+            };
+
+            const categorySlug = categoryMap[drinkName];
+            console.log('Category slug:', categorySlug);
+
+            if (categorySlug) {
+                this.open(categorySlug);
+            } else {
+                this.showEnhancedToast('This menu is coming soon!', 'info');
+            }
         });
     }
 
     open(categorySlug) {
-        const menuData = getMenuByCategory(categorySlug);
+        // Get menu data - with fallback support
+        let menuData = null;
+        
+        // Try to get from global coffeeMenu if it exists
+        if (typeof coffeeMenu !== 'undefined' && coffeeMenu[categorySlug]) {
+            menuData = coffeeMenu[categorySlug];
+        } 
+        // Otherwise try using getMenuByCategory function if it exists
+        else if (typeof getMenuByCategory === 'function') {
+            menuData = getMenuByCategory(categorySlug);
+        }
+        
         if (!menuData) {
-            this.showEnhancedToast('Menu not found', 'error');
+            console.error('Menu data not found for category:', categorySlug);
+            this.showEnhancedToast('Menu not found. Please refresh the page.', 'error');
             return;
         }
 
         this.currentCategory = menuData;
-        
+
         // Update modal content
         document.getElementById('menuModalTitle').textContent = menuData.category;
         document.getElementById('menuModalDescription').textContent = menuData.description;
-        
+
         // Render items with performance optimization
         this.renderItems(menuData.items);
-        
-        // Show modal with smooth animation
+
+        // Ensure modal is visible and animate in
+        try { if (this.modal) this.modal.style.display = 'flex'; } catch (e) {}
         requestAnimationFrame(() => {
-            this.modal.classList.add('menu-modal-active');
+            if (this.modal) this.modal.classList.add('menu-modal-active');
             document.body.style.overflow = 'hidden';
+            if (this.modal) this.modal.style.pointerEvents = 'auto';
         });
     }
 
@@ -293,9 +346,29 @@ class MenuModal {
     }
 
     close() {
+        if (!this.modal) return;
+        // Remove active class to trigger hide animation
         this.modal.classList.remove('menu-modal-active');
         document.body.style.overflow = 'auto';
+
+        // Allow animation to finish then hide fully and clean up
+        setTimeout(() => {
+            try { if (this.modal) this.modal.style.display = 'none'; } catch (e) {}
+            const items = document.getElementById('menuModalItems');
+            if (items) items.innerHTML = '';
+            try { if (this.modal) this.modal.style.pointerEvents = 'none'; } catch (e) {}
+        }, 320);
     }
+
+}
+
+// Helper function to get menu by category - defined globally
+function getMenuByCategory(categorySlug) {
+    if (typeof coffeeMenu !== 'undefined' && coffeeMenu[categorySlug]) {
+        return coffeeMenu[categorySlug];
+    }
+    console.warn('Menu category not found:', categorySlug);
+    return null;
 }
 
 // Initialize menu modal when DOM is ready

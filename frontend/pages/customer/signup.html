@@ -612,7 +612,7 @@
                         <i class="fas fa-phone"></i>
                         Phone Number
                     </label>
-                    <input type="tel" class="form-control" id="phone" name="phone" placeholder="+91 98765 43210" required autocomplete="tel">
+                    <input type="tel" class="form-control" id="phone" name="phone" placeholder="9876543210" required autocomplete="tel" inputmode="numeric" pattern="\d{10}" maxlength="10" oninput="this.value=this.value.replace(/\\D/g,'').slice(0,10)">
                     <div class="invalid-feedback">Please enter a valid phone number.</div>
                 </div>
                 
@@ -681,11 +681,20 @@
         let activeToast = null;
         let toastTimeout = null;
         
-        // Form data persistence key
-        const FORM_DATA_KEY = 'signupFormData';
-        
-        // Save form data to sessionStorage
-        function saveFormData() {
+        // Terms read state only
+        const TERMS_READ_KEY = 'termsRead';
+        const SIGNUP_DRAFT_KEY = 'signupDraft';
+        const SIGNUP_RETURN_KEY = 'signupReturnFromTerms';
+
+        function clearSignupFields() {
+            const ids = ['firstName', 'lastName', 'email', 'phone', 'password', 'confirmPassword'];
+            ids.forEach(id => {
+                const el = document.getElementById(id);
+                if (el) el.value = '';
+            });
+        }
+
+        function saveSignupDraft() {
             const formData = {
                 firstName: document.getElementById('firstName').value,
                 lastName: document.getElementById('lastName').value,
@@ -695,51 +704,34 @@
                 confirmPassword: document.getElementById('confirmPassword').value,
                 terms: document.getElementById('terms').checked
             };
-            try {
-                sessionStorage.setItem(FORM_DATA_KEY, JSON.stringify(formData));
-            } catch (e) {
-                console.warn('Could not save form data:', e);
-            }
+            try { sessionStorage.setItem(SIGNUP_DRAFT_KEY, JSON.stringify(formData)); } catch (e) { /* ignore */ }
         }
-        
-        // Clear form data from sessionStorage
-        function clearFormData() {
+
+        function restoreSignupDraft() {
             try {
-                sessionStorage.removeItem(FORM_DATA_KEY);
-            } catch (e) {
-                console.warn('Could not clear form data:', e);
-            }
-        }
-        
-        // Restore form data from sessionStorage
-        function restoreFormData() {
-            try {
-                const savedData = sessionStorage.getItem(FORM_DATA_KEY);
-                if (savedData) {
-                    const formData = JSON.parse(savedData);
-                    document.getElementById('firstName').value = formData.firstName || '';
-                    document.getElementById('lastName').value = formData.lastName || '';
-                    document.getElementById('email').value = formData.email || '';
-                    document.getElementById('phone').value = formData.phone || '';
-                    document.getElementById('password').value = formData.password || '';
-                    document.getElementById('confirmPassword').value = formData.confirmPassword || '';
-                    document.getElementById('terms').checked = formData.terms || false;
-                    // Trigger password strength check if password is filled
-                    if (formData.password) {
-                        checkPasswordStrength();
-                    }
+                const saved = sessionStorage.getItem(SIGNUP_DRAFT_KEY);
+                if (!saved) return;
+                const formData = JSON.parse(saved);
+                document.getElementById('firstName').value = formData.firstName || '';
+                document.getElementById('lastName').value = formData.lastName || '';
+                document.getElementById('email').value = formData.email || '';
+                document.getElementById('phone').value = formData.phone || '';
+                document.getElementById('password').value = formData.password || '';
+                document.getElementById('confirmPassword').value = formData.confirmPassword || '';
+                document.getElementById('terms').checked = formData.terms || false;
+                if (formData.password) {
+                    checkPasswordStrength();
                 }
-            } catch (e) {
-                console.warn('Could not restore form data:', e);
-            }
+            } catch (e) { /* ignore */ }
         }
         
         // Open Terms or Privacy in new tab
         function openTermsOrPrivacy(url) {
-            // Save form data before opening new tab
-            saveFormData();
-            // Open in new tab
-            window.open(url, '_blank');
+            // Save draft before navigating away
+            try { sessionStorage.setItem(SIGNUP_RETURN_KEY, 'true'); } catch (e) { /* ignore */ }
+            saveSignupDraft();
+            // Open in same tab
+            window.location.href = url;
         }
         
 
@@ -969,12 +961,51 @@
             
             return isValid;
         }
+
+        function getValidationErrorMessage() {
+            const firstName = document.getElementById('firstName');
+            if (firstName.value.trim().length < 2) {
+                return 'Please enter a valid first name.';
+            }
+
+            const lastName = document.getElementById('lastName');
+            if (lastName.value.trim().length < 2) {
+                return 'Please enter a valid last name.';
+            }
+
+            const email = document.getElementById('email');
+            const emailRegex = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+            if (!emailRegex.test(email.value)) {
+                return 'Please enter a valid email address.';
+            }
+
+            const phone = document.getElementById('phone');
+            const phoneDigits = phone.value.replace(/\D/g, '');
+            if (phoneDigits.length !== 10) {
+                return 'Please enter a valid 10-digit phone number.';
+            }
+
+            const password = document.getElementById('password');
+            const passwordRegex = /^(?=.*[a-z])(?=.*[A-Z])(?=.*\d)(?=.*[@$!%*?&])[A-Za-z\d@$!%*?&]{8,}$/;
+            if (!passwordRegex.test(password.value)) {
+                return 'Password must be at least 8 characters and include uppercase, lowercase, number, and special character.';
+            }
+
+            const confirmPassword = document.getElementById('confirmPassword');
+            if (confirmPassword.value !== password.value) {
+                return 'Passwords do not match.';
+            }
+
+            return '';
+        }
         
         document.getElementById('signupForm').addEventListener('submit', async function(e) {
             e.preventDefault();
             
-            if (!validateForm()) {
-                showToast('Please fix the errors in the form.', 'error');
+            const errorMessage = getValidationErrorMessage();
+            if (errorMessage) {
+                validateForm();
+                showToast(errorMessage, 'error');
                 return;
             }
             
@@ -1009,13 +1040,13 @@
                     password: password
                 });
                 
-                // Clear the form data from sessionStorage after successful signup
-                clearFormData();
+            // Clear fields after successful signup
+            clearSignupFields();
                 
                 showToast('Account created successfully! Redirecting to login...', 'success');
                 
                 setTimeout(() => {
-                    window.location.href = 'login.html';
+                    window.location.href = '{% url "login" %}';
                 }, 2000);
                 
             } catch (error) {
@@ -1042,8 +1073,25 @@
             }
         });
         
-        // Restore form data on page load
-        restoreFormData();
+        // Track terms read (kept across refreshes)
+        document.getElementById('terms').addEventListener('change', function() {
+            try { sessionStorage.setItem(TERMS_READ_KEY, this.checked ? 'true' : 'false'); } catch (e) { /* ignore */ }
+        });
+
+        // Always start with a clean form
+        window.addEventListener('DOMContentLoaded', function() {
+            const returningFromTerms = sessionStorage.getItem(SIGNUP_RETURN_KEY) === 'true';
+            if (returningFromTerms) {
+                restoreSignupDraft();
+                sessionStorage.removeItem(SIGNUP_RETURN_KEY);
+            } else {
+                clearSignupFields();
+            }
+            try {
+                const terms = document.getElementById('terms');
+                if (terms) terms.checked = sessionStorage.getItem(TERMS_READ_KEY) === 'true';
+            } catch (e) { /* ignore */ }
+        });
     </script>
 </body>
 

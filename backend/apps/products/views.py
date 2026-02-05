@@ -208,6 +208,7 @@ def login(request):
                 except Exception:
                     pass
         request.session.modified = True
+        request.session.save()
         
         # TODO: Generate JWT tokens
         
@@ -218,11 +219,10 @@ def login(request):
             'user': {
                 'email': email,
                 'firstName': user.get('firstName'),
-                'lastName': user.get('lastName')
+                'lastName': user.get('lastName'),
+                'phone': user.get('phone')
             }
         })
-        # Explicitly ensure session cookie is sent
-        response['Set-Cookie'] = request.session.session_key
         return response
         
     except json.JSONDecodeError:
@@ -288,6 +288,7 @@ def signup(request):
         except Exception:
             request.session['user_id'] = None
         request.session.modified = True
+        request.session.save()
         
         # TODO: Generate JWT tokens
         
@@ -298,7 +299,8 @@ def signup(request):
             'user': {
                 'email': email,
                 'firstName': firstName,
-                'lastName': lastName
+                'lastName': lastName,
+                'phone': phone
             }
         }, status=201)
         
@@ -430,6 +432,70 @@ def reset_password(request):
         return JsonResponse({
             'message': str(e)
         }, status=500)
+
+
+@csrf_exempt
+@require_http_methods(["GET", "POST"])
+def profile(request):
+    """
+    Get or update user profile by email.
+    GET: ?email=user@example.com
+    POST body: { "email": "...", "firstName": "...", "lastName": "...", "phone": "...", "address": "...", ... }
+    """
+    try:
+        if request.method == "GET":
+            email = request.GET.get('email')
+            if not email:
+                return JsonResponse({'success': False, 'message': 'Email is required'}, status=400)
+
+            user = User.find_by_email(email)
+            if not user:
+                return JsonResponse({'success': False, 'message': 'User not found'}, status=404)
+
+            # Remove sensitive fields
+            user_safe = {k: v for k, v in user.items() if k != 'password'}
+            # Convert ObjectId to string if present
+            try:
+                if '_id' in user_safe:
+                    user_safe['_id'] = str(user_safe['_id'])
+            except Exception:
+                pass
+
+            return JsonResponse({'success': True, 'user': user_safe})
+
+        # POST: update profile
+        data = json.loads(request.body)
+        email = data.get('email') or request.session.get('email')
+        if not email:
+            return JsonResponse({'success': False, 'message': 'Email is required'}, status=400)
+
+        user = User.find_by_email(email)
+        if not user:
+            return JsonResponse({'success': False, 'message': 'User not found'}, status=404)
+
+        # Whitelist fields to update
+        update_fields = {}
+        for key in ('firstName', 'lastName', 'phone', 'address', 'coffeePreferences', 'avatar'):
+            if key in data:
+                update_fields[key] = data.get(key)
+
+        if not update_fields:
+            return JsonResponse({'success': False, 'message': 'No profile fields to update'}, status=400)
+
+        User.update(email, update_fields)
+        updated = User.find_by_email(email)
+        user_safe = {k: v for k, v in updated.items() if k != 'password'}
+        try:
+            if '_id' in user_safe:
+                user_safe['_id'] = str(user_safe['_id'])
+        except Exception:
+            pass
+
+        return JsonResponse({'success': True, 'message': 'Profile updated', 'user': user_safe})
+    except json.JSONDecodeError:
+        return JsonResponse({'success': False, 'message': 'Invalid JSON'}, status=400)
+    except Exception as e:
+        return JsonResponse({'success': False, 'message': str(e)}, status=500)
 
 
 # ==========================================

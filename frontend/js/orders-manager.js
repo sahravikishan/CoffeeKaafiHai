@@ -135,11 +135,11 @@ function initializeUserProfile() {
 }
 
 /**
- * Save user profile to localStorage
+ * Save user profile to BOTH localStorage AND backend MongoDB
  * @param {Object} profileData - Profile data to save
  * @returns {boolean} Success status
  */
-function saveUserProfile(profileData) {
+async function saveUserProfile(profileData) {
     // Only allow saving profile for logged-in users
     const isLoggedIn = localStorage.getItem('isLoggedIn') === 'true';
     if (!isLoggedIn) {
@@ -153,6 +153,8 @@ function saveUserProfile(profileData) {
             showToast('User session expired. Please log in again.', 'error');
             return false;
         }
+        
+        // PERMANENT FIX: Save to localStorage
         localStorage.setItem(`userProfile_${currentUser}`, JSON.stringify(profileData));
         userProfileData = profileData;
         updateProfileDisplay();
@@ -179,11 +181,95 @@ function saveUserProfile(profileData) {
             console.warn('Failed to update users database:', e);
         }
         
+        // PERMANENT FIX: ALSO save to backend MongoDB via API
+        try {
+            await persistProfileToBackend(profileData);
+        } catch (e) {
+            console.warn('saveUserProfile: failed to persist to backend', e);
+            // Don't fail the save if backend persistence fails - localStorage is primary
+        }
+        
         return true;
     } catch (err) {
         console.error('saveUserProfile: failed to save to localStorage', err);
         showToast('Unable to save profile (storage full). Try a smaller image.', 'error');
         return false;
+    }
+}
+
+/**
+ * PERMANENT FIX: Persist profile data to backend MongoDB via API
+ * This ensures data survives across sessions and syncs across devices
+ * @param {Object} profileData - Profile data to persist
+ * @returns {Promise<boolean>} Success status
+ */
+async function persistProfileToBackend(profileData) {
+    try {
+        const currentUser = localStorage.getItem('currentUser');
+        if (!currentUser) {
+            console.warn('persistProfileToBackend: no current user');
+            return false;
+        }
+        
+        // Prepare data for backend
+        const backendPayload = {
+            email: currentUser,
+            firstName: profileData.firstName || '',
+            lastName: profileData.lastName || '',
+            phone: profileData.phone || '',
+            address: profileData.address || '',
+            coffeePreferences: profileData.coffeePreferences || {},
+            avatar: profileData.avatar || ''
+        };
+        
+        // Call backend API to save profile
+        const response = await fetch('http://localhost:8000/api/auth/profile/', {
+            method: 'POST',
+            headers: {
+                'Content-Type': 'application/json',
+                'X-CSRFToken': getCSRFToken() || ''
+            },
+            credentials: 'include',
+            body: JSON.stringify(backendPayload)
+        });
+        
+        if (!response.ok) {
+            const error = await response.json().catch(() => ({}));
+            console.warn('Backend profile save failed:', error);
+            return false;
+        }
+        
+        const result = await response.json();
+        console.log('Profile persisted to backend successfully');
+        return result.success === true;
+        
+    } catch (error) {
+        console.error('persistProfileToBackend error:', error);
+        return false;
+    }
+}
+
+/**
+ * Helper function to get CSRF token (for backend persistence)
+ * @returns {string|null} CSRF token or null
+ */
+function getCSRFToken() {
+    try {
+        const name = 'csrftoken';
+        if (document.cookie && document.cookie !== '') {
+            const cookies = document.cookie.split(';');
+            for (let i = 0; i < cookies.length; i++) {
+                const cookie = cookies[i].trim();
+                if (cookie.substring(0, name.length + 1) === (name + '=')) {
+                    return decodeURIComponent(cookie.substring(name.length + 1));
+                }
+            }
+        }
+        // Try meta tag
+        const meta = document.querySelector('[name="csrf-token"]');
+        return meta ? meta.getAttribute('content') : null;
+    } catch (e) {
+        return null;
     }
 }
 
@@ -648,6 +734,14 @@ class OrdersManager {
     }
 
     /**
+     * Reinitialize for a new/different user (called on login)
+     */
+    reinit() {
+        this.userId = localStorage.getItem('currentUser') || localStorage.getItem('userId') || localStorage.getItem('userEmail') || null;
+        this.loadOrders();
+    }
+
+    /**
      * Save orders for current user to localStorage
      */
     saveOrders() {
@@ -974,11 +1068,35 @@ function removeAvatar() {
  */
 async function loadLogoBase64() {
     try {
-        const resp = await fetch("{% static 'images/logo.png' %}");
-        if (!resp.ok) {
-            console.warn('Logo fetch failed:', resp.status);
+        // The file may be served as a static JS asset (Django template tags won't be processed).
+        // Fallback strategy:
+        // 1) If the template tag was processed (unlikely for .js served statically) use it.
+        // 2) Otherwise try the common static path '/static/images/logo.png'.
+        const rawPath = "{% static 'images/logo.png' %}";
+        const candidatePaths = [];
+        if (rawPath && rawPath.indexOf('{%') === -1) {
+            candidatePaths.push(rawPath);
+        }
+        // Common Django static path fallback (works on dev server and production if collected)
+        candidatePaths.push('/static/images/logo.png');
+        // Relative fallback
+        candidatePaths.push('images/logo.png');
+
+        let resp = null;
+        for (const p of candidatePaths) {
+            try {
+                resp = await fetch(p);
+                if (resp && resp.ok) break;
+            } catch (err) {
+                // ignore and try next
+            }
+        }
+
+        if (!resp || !resp.ok) {
+            console.warn('Logo fetch failed for all candidates');
             return;
         }
+
         const blob = await resp.blob();
         const reader = new FileReader();
         const dataUrl = await new Promise((resolve, reject) => {
@@ -1669,6 +1787,52 @@ function clearAllUserData() {
     }
 }
 
+/**
+ * Clear only auth/session keys on logout (preserve user data for next login)
+ * @returns {boolean} Success status
+ */
+function clearAuthSessionOnly() {
+    try {
+        // PERMANENT FIX: Reset in-memory profile data BEFORE clearing auth keys
+        // This prevents stale data from interfering with the next login
+        userProfileData = null;
+        
+        // Attempt server-side logout to clear session
+        try {
+            const name = 'csrftoken';
+            let csrfToken = '';
+            const cookies = document.cookie.split(';');
+            for (let i = 0; i < cookies.length; i++) {
+                const cookie = cookies[i].trim();
+                if (cookie.substring(0, name.length + 1) === (name + '=')) {
+                    csrfToken = decodeURIComponent(cookie.substring(name.length + 1));
+                    break;
+                }
+            }
+            fetch('/api/auth/logout/', {
+                method: 'POST',
+                headers: csrfToken ? { 'X-CSRFToken': csrfToken } : {},
+                credentials: 'include'
+            }).catch(() => {});
+        } catch (e) { /* ignore */ }
+
+        // Remove only auth/session keys
+        const keys = ['userEmail', 'isLoggedIn', 'currentUser',
+                     'name', 'profilePhoto', 'email', 'userFirstName', 'userLastName', 'userPhone',
+                     'accessToken', 'refreshToken', 'userSession', 'rememberMe'];
+        keys.forEach(k => localStorage.removeItem(k));
+        try { sessionStorage.removeItem('userSession'); } catch (e) { /* ignore */ }
+
+        window.dispatchEvent(new CustomEvent('profileUpdated'));
+        window.dispatchEvent(new Event('storage'));
+
+        return true;
+    } catch (err) {
+        console.error('clearAuthSessionOnly failed', err);
+        return false;
+    }
+}
+
 /* =========================================================
    SECTION 9: EVENT LISTENERS SETUP
    Purpose: Initialize all event listeners on page load
@@ -1862,13 +2026,25 @@ function setupLogoutHandlers() {
     
     const confirmLogoutBtn = document.getElementById('confirmLogoutBtn');
     if (confirmLogoutBtn) {
-        confirmLogoutBtn.addEventListener('click', function() {
-            clearAllUserData();
+        confirmLogoutBtn.addEventListener('click', async function() {
+            try {
+                // PERMANENT FIX: Persist profile to backend BEFORE logout
+                if (userProfileData) {
+                    try {
+                        await persistProfileToBackend(userProfileData);
+                    } catch (e) {
+                        console.warn('logout: failed to persist profile before logout', e);
+                    }
+                }
+            } catch (e) {
+                console.warn('logout: failed during profile persistence', e);
+            }
+            clearAuthSessionOnly();
             closeModal('logoutModal');
-            showToast('Logged out. Redirecting to home page', 'info');
+            showToast('Logged out successfully.', 'info');
             setTimeout(function() {
                 window.location.href = '/';
-            }, 700);
+            }, 4500);
         });
     }
 }
@@ -2002,7 +2178,7 @@ window.addEventListener("DOMContentLoaded", async () => {
             headerLogo.src = logoBase64;
         }
     }
-    
+
     // Reset userProfileData to ensure fresh load for current user
     userProfileData = null;
     
@@ -2037,6 +2213,29 @@ window.addEventListener("DOMContentLoaded", async () => {
     
     // Setup all event listeners
     setupEventListeners();
+});
+
+/**
+ * PERMANENT FIX: Listen for storage changes from same/other tabs and sync profile
+ * This ensures profile data stays consistent across tabs and after login/logout
+ */
+window.addEventListener('storage', function(e) {
+    // Reload profile when authentication state changes
+    if (e.key === 'isLoggedIn' || e.key === 'currentUser') {
+        console.log('Storage changed: Authentication state updated. Reloading profile...');
+        // Reset profile data to force reload from localStorage
+        userProfileData = null;
+        // Reinitialize with new user data
+        userProfileData = initializeUserProfile();
+        // Update UI if on profile page
+        if (typeof updateProfileDisplay === 'function') {
+            try {
+                updateProfileDisplay();
+            } catch (err) {
+                console.warn('Failed to update profile display on storage event', err);
+            }
+        }
+    }
 });
 
 /* =========================================================

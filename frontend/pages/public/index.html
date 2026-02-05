@@ -326,6 +326,7 @@
             animation: spin 1s linear infinite;
         }
 
+
         @keyframes spin {
             from { transform: rotate(0deg); }
             to { transform: rotate(360deg); }
@@ -438,7 +439,7 @@
             line-height: 1.6;
         }
 
-        /* Feedback Card */
+        /* Feedback Card - Scale Effect */
         .feedback-card {
             background: white;
             border-radius: 30px;
@@ -447,6 +448,8 @@
             border: 2px solid rgba(210, 105, 30, 0.2);
             position: relative;
             overflow: hidden;
+            transition: all 0.3s cubic-bezier(0.4, 0.0, 0.2, 1);
+            will-change: transform, box-shadow;
         }
 
         .feedback-card::before {
@@ -801,6 +804,9 @@
 
         .feedback-tooltip {
             position: fixed;
+            right: 30px;
+            bottom: 120px;
+            transform: translateX(0);
             background: linear-gradient(135deg, #2a2a2a, #1a1a1a);
             color: white;
             padding: 12px 20px;
@@ -810,13 +816,35 @@
             white-space: nowrap;
             opacity: 0;
             visibility: hidden;
-            transition: all 0.3s ease;
+            transition: opacity 0.3s ease, transform 0.3s ease;
             box-shadow: 0 8px 24px rgba(0, 0, 0, 0.4);
-            max-width: 220px;
+            max-width: calc(100vw - 40px);
             text-align: center;
             z-index: 10000;
             pointer-events: none;
-            display: none;
+        }
+
+        .feedback-tooltip::after {
+            content: '';
+            position: absolute;
+            bottom: -8px;
+            left: 50%;
+            transform: translateX(-50%);
+            border-width: 8px 8px 0 8px;
+            border-style: solid;
+            border-color: #1a1a1a transparent transparent transparent;
+        }
+
+        .floating-feedback-btn:hover .feedback-tooltip {
+            opacity: 1;
+            visibility: visible;
+            transform: translateY(-4px);
+        }
+
+        .back-to-top.suppressed {
+            opacity: 0 !important;
+            visibility: hidden !important;
+            pointer-events: none !important;
         }
 
         @media (max-width: 768px) {
@@ -908,8 +936,8 @@
         }
 
         .feedback-display-card:hover {
-            transform: translateY(-5px);
-            box-shadow: 0 15px 40px rgba(210, 105, 30, 0.2);
+            transform: scale(1.03);
+            box-shadow: 0 18px 48px rgba(210, 105, 30, 0.18);
         }
 
         .feedback-stars {
@@ -953,6 +981,9 @@
 
             .feedback-tooltip {
                 font-size: 0.85rem;
+                right: 20px;
+                bottom: 100px;
+                max-width: calc(100vw - 32px);
             }
 
             .feedback-modal-content {
@@ -982,10 +1013,50 @@
             }
         }
 
+        .menu-modal {
+            z-index: 10000;
+        }
+
+        .menu-modal-overlay {
+            z-index: 10000;
+        }
+
+        .menu-modal-content {
+            position: relative;
+            z-index: 10001;
+        }
+
+        .menu-modal-close {
+            position: relative;
+            z-index: 10002;
+            pointer-events: auto;
+        }
 
     </style>
     
     <link rel="stylesheet" href="{% static 'css/style.css' %}">
+
+    <style>
+        /* ===========================
+           Card Hover Effects (Index Only)
+           =========================== */
+        /* Scale effect for feedback + existing cards */
+        .feature-card:hover {
+            transform: scale(1.05) !important;
+            box-shadow: 0 18px 48px rgba(0, 0, 0, 0.16) !important;
+        }
+
+        .testimonial-card:hover {
+            transform: scale(1.05) !important;
+            box-shadow: 0 20px 50px rgba(0, 0, 0, 0.16) !important;
+        }
+
+        /* Lift effect for menu cards only */
+        .drink-card:hover {
+            transform: translateY(-10px) !important;
+            box-shadow: 0 26px 60px rgba(0, 0, 0, 0.22) !important;
+        }
+    </style>
     <link rel="stylesheet" href="{% static 'css/cart-styles.css' %}">
     <link rel="stylesheet" href="{% static 'css/menu-modal-styles.css' %}">
 </head>
@@ -1556,7 +1627,7 @@
                     
                     <div class="mb-4">
                         <label for="customerPhone" class="form-label">Phone Number (Optional)</label>
-                        <input type="tel" class="form-control" id="customerPhone" placeholder="+91 XXXXX XXXXX">
+                        <input type="tel" class="form-control" id="customerPhone" placeholder="9876543210" inputmode="numeric" pattern="\d{10}" maxlength="10" oninput="this.value=this.value.replace(/\D/g,'').slice(0,10)">
                     </div>
 
                     <!-- Rating Section -->
@@ -1692,62 +1763,7 @@
         <div class="feedback-tooltip">Give feedback</div>
     </div>
 
-    <script>
-        // Dynamic tooltip positioning for feedback button
-        document.addEventListener('DOMContentLoaded', function() {
-            const feedbackBtn = document.getElementById('floatingFeedbackBtn');
-            const tooltip = feedbackBtn ? feedbackBtn.querySelector('.feedback-tooltip') : null;
-            
-            if (!feedbackBtn || !tooltip) return;
-            
-            feedbackBtn.addEventListener('mouseenter', function() {
-                const btnRect = feedbackBtn.getBoundingClientRect();
-                const tooltipRect = tooltip.getBoundingClientRect();
-                
-                // Show tooltip to measure
-                tooltip.style.display = 'block';
-                tooltip.style.opacity = '0';
-                
-                const viewportWidth = window.innerWidth;
-                const viewportHeight = window.innerHeight;
-                
-                // Calculate available space
-                const spaceAbove = btnRect.top;
-                const spaceBelow = viewportHeight - btnRect.bottom;
-                const spaceLeft = btnRect.left;
-                const spaceRight = viewportWidth - btnRect.right;
-                
-                let top, left;
-                
-                // Determine vertical position (prefer above)
-                if (spaceAbove >= 80 || spaceAbove > spaceBelow) {
-                    top = btnRect.top - 70;
-                } else {
-                    top = btnRect.bottom + 10;
-                }
-                
-                // Determine horizontal position (center with bounds check)
-                left = btnRect.left + (btnRect.width / 2) - 110; // 110 = half of max-width 220px
-                
-                // Keep within viewport
-                if (left < 10) left = 10;
-                if (left + 220 > viewportWidth - 10) left = viewportWidth - 230;
-                
-                tooltip.style.top = top + 'px';
-                tooltip.style.left = left + 'px';
-                tooltip.style.opacity = '1';
-                tooltip.style.visibility = 'visible';
-            });
-            
-            feedbackBtn.addEventListener('mouseleave', function() {
-                tooltip.style.opacity = '0';
-                tooltip.style.visibility = 'hidden';
-                setTimeout(() => {
-                    tooltip.style.display = 'none';
-                }, 300);
-            });
-        });
-    </script>
+
 
     <!-- Footer -->
     <footer id="contact" class="footer-section">
@@ -1777,16 +1793,16 @@
             </div>
             
             <div class="social-icons">
-                <a href="#" class="social-icon" aria-label="Facebook">
+                <a href="https://www.facebook.com/facebook" class="social-icon" aria-label="Facebook">
                     <i class="fab fa-facebook-f"></i>
                 </a>
-                <a href="#" class="social-icon" aria-label="Instagram">
+                <a href="https://www.instagram.com/instagram" class="social-icon" aria-label="Instagram">
                     <i class="fab fa-instagram"></i>
                 </a>
-                <a href="https://x.com/X" target="_blank" class="social-icon" aria-label="X (Twitter)">
+                <a href="https://www.x.com/x" target="_blank" class="social-icon" aria-label="X (Twitter)">
                     <i class="fab fa-x-twitter"></i>
                 </a>
-                <a href="#" class="social-icon" aria-label="YouTube">
+                <a href="https://www.youtube.com/youtube" class="social-icon" aria-label="YouTube">
                     <i class="fab fa-youtube"></i>
                 </a>
             </div>
@@ -1801,16 +1817,46 @@
 
 
     <!-- Bootstrap JS -->
-    <script data-cfasync="false" src="/cdn-cgi/scripts/5c5dd728/cloudflare-static/email-decode.min.js"></script><script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/js/bootstrap.bundle.min.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/js/bootstrap.bundle.min.js"></script>
     
     <script>
         // Check if user is logged in via Django context and redirect to profile
         document.addEventListener('DOMContentLoaded', function() {
             // Check Django context variable passed to template
-            const isAuthenticated = {{ is_authenticated|lower|default:"false" }};
-            
-            // If user is authenticated via Django session, redirect to profile page
+            const isAuthenticated = {% if is_authenticated %}true{% else %}false{% endif %};
+
+            // If user is authenticated via Django session, mirror into localStorage
             if (isAuthenticated === true) {
+                try {
+                    const email = '{{ user.email|escapejs }}';
+                    const firstName = '{{ user.first_name|escapejs }}';
+                    const lastName = '{{ user.last_name|escapejs }}';
+
+                    if (email) {
+                        localStorage.setItem('isLoggedIn', 'true');
+                        localStorage.setItem('currentUser', email);
+                        localStorage.setItem('userEmail', email);
+                        localStorage.setItem('userFirstName', firstName || '');
+                        localStorage.setItem('userLastName', lastName || '');
+
+                        const profileKey = `userProfile_${email}`;
+                        if (!localStorage.getItem(profileKey)) {
+                            const starterProfile = {
+                                firstName: firstName || '',
+                                lastName: lastName || '',
+                                email: email || '',
+                                phone: '',
+                                coffeePreferences: {},
+                                avatar: `https://ui-avatars.com/api/?name=${encodeURIComponent((firstName || '') + ' ' + (lastName || ''))}&size=200&background=D2691E&color=fff&bold=true`,
+                                memberSince: new Date().toLocaleString('en-US', { month: 'long', year: 'numeric' })
+                            };
+                            try { localStorage.setItem(profileKey, JSON.stringify(starterProfile)); } catch (e) { /* ignore */ }
+                        }
+                    }
+                } catch (e) {
+                    console.warn('index: failed to mirror Django user to localStorage', e);
+                }
+
                 // Give a brief moment for page to load, then redirect
                 setTimeout(function() {
                     window.location.href = '{% url "profile" %}';
@@ -1889,12 +1935,15 @@
         function updateAuthLinks() {
             try {
                 const isLoggedIn = localStorage.getItem('isLoggedIn') === 'true';
+                const currentUser = localStorage.getItem('currentUser');
+                const userEmail = localStorage.getItem('userEmail');
+                const isLoggedInResolved = isLoggedIn && !!(currentUser || userEmail);
                 const loginLink = document.getElementById('navLoginLink');
                 const signupLink = document.getElementById('navSignupLink');
                 const logoutLink = document.getElementById('navLogoutLink');
                 const profileLink = document.getElementById('navProfileLink');
 
-                if (isLoggedIn) {
+                if (isLoggedInResolved) {
                     if (loginLink) loginLink.style.display = 'none';
                     if (signupLink) signupLink.style.display = 'none';
                     if (logoutLink) logoutLink.style.display = 'block';
@@ -1913,18 +1962,79 @@
             try {
                 const logoutLink = document.getElementById('navLogoutLink');
                 if (logoutLink) {
-                    logoutLink.addEventListener('click', function(e) {
+                    logoutLink.addEventListener('click', async function(e) {
                         e.preventDefault();
-                        // Clear login flag and notify
-                        localStorage.setItem('isLoggedIn', 'false');
-                        // Clear guest cart on logout
-                        localStorage.removeItem('cart_guest');
+                        const currentUser = localStorage.getItem('currentUser');
+
+                        // PERMANENT FIX: Persist profile to backend before logout
+                        try {
+                            if (currentUser && typeof window.userProfileData !== 'undefined' && window.userProfileData) {
+                                const profileKey = `userProfile_${currentUser}`;
+                                const savedProfile = JSON.parse(localStorage.getItem(profileKey) || 'null');
+                                if (savedProfile && typeof window.persistProfileToBackend === 'function') {
+                                    await window.persistProfileToBackend(savedProfile);
+                                }
+                            }
+                        } catch (e) {
+                            console.warn('logout: failed to persist profile before logout', e);
+                        }
+
+                        // Attempt server-side logout to clear session
+                        try {
+                            const csrfToken = (function() {
+                                const name = 'csrftoken';
+                                const cookies = document.cookie.split(';');
+                                for (let i = 0; i < cookies.length; i++) {
+                                    const cookie = cookies[i].trim();
+                                    if (cookie.substring(0, name.length + 1) === (name + '=')) {
+                                        return decodeURIComponent(cookie.substring(name.length + 1));
+                                    }
+                                }
+                                return '';
+                            })();
+                            await fetch('/api/auth/logout/', {
+                                method: 'POST',
+                                headers: csrfToken ? { 'X-CSRFToken': csrfToken } : {},
+                                credentials: 'include'
+                            });
+                        } catch (err) {
+                            console.warn('logout: server logout failed', err);
+                        }
+
+                        // Clear session keys (keep userProfile_{email} for future login)
+                        localStorage.removeItem('isLoggedIn');
+                        localStorage.removeItem('currentUser');
+                        localStorage.removeItem('userEmail');
+                        localStorage.removeItem('userFirstName');
+                        localStorage.removeItem('userLastName');
+                        localStorage.removeItem('userPhone');
+                        localStorage.removeItem('name');
+                        localStorage.removeItem('email');
+                        localStorage.removeItem('phone');
+                        localStorage.removeItem('userSession');
+                        localStorage.removeItem('rememberMe');
+                        try { sessionStorage.removeItem('userSession'); } catch (e) { /* ignore */ }
+                        // Keep guest cart in localStorage so returning users retain selections
+                        // (do not remove 'cart_guest')
+                        
+                        // PERMANENT FIX: Reset in-memory profile data to prevent stale data
+                        try {
+                            if (typeof window !== 'undefined' && window.userProfileData !== undefined) {
+                                window.userProfileData = null;
+                            }
+                        } catch (e) { /* ignore */ }
+                        
                         // dispatch storage-like event for same tab
                         window.dispatchEvent(new Event('storage'));
                         window.dispatchEvent(new CustomEvent('profileUpdated'));
                         updateAuthLinks();
+                        if (window.cartManager && typeof window.cartManager.showToast === 'function') {
+                            window.cartManager.showToast('Logged out successfully.', 'info');
+                        }
                         // redirect to home
-                        window.location.href = '/';
+                        setTimeout(function() {
+                            window.location.href = '/';
+                        }, 4500);
                     });
                 }
 
@@ -2124,6 +2234,7 @@
 
                 let highlighted = -1;
                 let currentResults = [];
+                let lastQuery = '';
 
                 function normalize(s){ return String(s||'').toLowerCase(); }
 
@@ -2158,6 +2269,7 @@
                         renderSuggestions([]);
                         return;
                     }
+                    lastQuery = qnorm;
                     const tokens = qnorm.split(/\s+/).filter(Boolean);
 
                     const scored = index.map(entry => {
@@ -2218,7 +2330,7 @@
                         }, 300);
 
                         renderSuggestions([]);
-                        input.value = res.title;
+                        resetSearchState(true);
                         return;
                     }
                 }
@@ -2257,6 +2369,16 @@
                     if (highlighted >= 0 && items[highlighted]) items[highlighted].scrollIntoView({ block: 'nearest' });
                 }
 
+                function resetSearchState(clearInput) {
+                    highlighted = -1;
+                    currentResults = [];
+                    renderSuggestions([]);
+                    if (clearInput) {
+                        input.value = '';
+                        lastQuery = '';
+                    }
+                }
+
                 // Input handling (debounced)
                 let debounceTimer = null;
                 input.addEventListener('input', function(e){
@@ -2271,6 +2393,13 @@
                     if (!v) return;
                     doSearch(v);
                     setTimeout(() => { if (currentResults.length > 0) selectResult(0); }, 150);
+                });
+
+                // Clear previous query on new focus to avoid reusing old search
+                input.addEventListener('focus', function() {
+                    if (input.value || lastQuery) {
+                        resetSearchState(true);
+                    }
                 });
 
                 // Hide suggestions when clicking outside
@@ -2500,7 +2629,7 @@
         function updateFeedbackCards() {
             const feedbacks = JSON.parse(localStorage.getItem('customerFeedbacks') || '[]');
             
-            // Filter feedbacks with 4+ ratings and sort by timestamp (newest first - FIFO queue)
+            // Queue: newest 4+ appears first, older shift down (max 3)
             const topFeedbacks = feedbacks
                 .filter(f => f.rating >= 4)
                 .sort((a, b) => new Date(b.timestamp) - new Date(a.timestamp))
@@ -2512,7 +2641,7 @@
                 // Show default testimonials if no feedback yet
                 container.innerHTML = `
                     <div class="col-lg-4 col-md-6">
-                        <div class="testimonial-card">
+                        <div class="testimonial-card animate-in">
                             <div class="stars" align="center">
                                 <i class="fas fa-star"></i>
                                 <i class="fas fa-star"></i>
@@ -2528,7 +2657,7 @@
                         </div>
                     </div>
                     <div class="col-lg-4 col-md-6">
-                        <div class="testimonial-card">
+                        <div class="testimonial-card animate-in">
                             <div class="stars" align="center">
                                 <i class="fas fa-star"></i>
                                 <i class="fas fa-star"></i>
@@ -2544,7 +2673,7 @@
                         </div>
                     </div>
                     <div class="col-lg-4 col-md-6">
-                        <div class="testimonial-card">
+                        <div class="testimonial-card animate-in">
                             <div class="stars" align="center">
                                 <i class="fas fa-star"></i>
                                 <i class="fas fa-star"></i>
@@ -2581,7 +2710,7 @@
                 const col = document.createElement('div');
                 col.className = 'col-lg-4 col-md-6';
                 col.innerHTML = `
-                    <div class="testimonial-card">
+                    <div class="testimonial-card animate-in">
                         <div class="stars" align="center">
                             ${starsHtml}
                         </div>
@@ -2600,6 +2729,7 @@
         function handleFloatingButtonVisibility() {
             const aboutSection = document.querySelector('.about-section');
             const floatingBtn = document.getElementById('floatingFeedbackBtn');
+            const backToTopButtons = document.querySelectorAll('#backToTop');
             
             if (!aboutSection || !floatingBtn) return;
             
@@ -2608,8 +2738,10 @@
             
             if (isAboutVisible) {
                 floatingBtn.classList.add('show');
+                backToTopButtons.forEach(btn => btn.classList.add('suppressed'));
             } else {
                 floatingBtn.classList.remove('show');
+                backToTopButtons.forEach(btn => btn.classList.remove('suppressed'));
             }
         }
 
@@ -2642,3 +2774,4 @@
 
 </html>
 
+ 

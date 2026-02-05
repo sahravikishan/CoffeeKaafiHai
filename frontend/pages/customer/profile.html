@@ -1189,7 +1189,7 @@
                                 </div>
                                 <div class="mb-3">
                                     <label for="phone" class="form-label">Phone Number</label>
-                                    <input type="tel" class="form-control" id="phone" value="" placeholder="Phone number">
+                                    <input type="tel" class="form-control" id="phone" value="" placeholder="9876543210" inputmode="numeric" pattern="\d{10}" maxlength="10" oninput="this.value=this.value.replace(/\\D/g,'').slice(0,10)">
                                 </div>
                                 <div class="mb-3">
                                     <label for="address" class="form-label">Address</label>
@@ -1413,6 +1413,42 @@
     <script>
         // Check authentication on page load
         window.addEventListener('DOMContentLoaded', function() {
+            // Mirror Django session into localStorage for client-side scripts
+            const isAuthenticated = {% if is_authenticated %}true{% else %}false{% endif %};
+            if (isAuthenticated === true) {
+                try {
+                    const email = '{{ user.email|escapejs }}';
+                    const firstName = '{{ user.firstName|escapejs }}';
+                    const lastName = '{{ user.lastName|escapejs }}';
+                    const phone = '{{ user.phone|escapejs }}';
+
+                    if (email) {
+                        localStorage.setItem('isLoggedIn', 'true');
+                        localStorage.setItem('currentUser', email);
+                        localStorage.setItem('userEmail', email);
+                        localStorage.setItem('userFirstName', firstName || '');
+                        localStorage.setItem('userLastName', lastName || '');
+                        localStorage.setItem('userPhone', phone || '');
+
+                        const profileKey = `userProfile_${email}`;
+                        if (!localStorage.getItem(profileKey)) {
+                            const starterProfile = {
+                                firstName: firstName || '',
+                                lastName: lastName || '',
+                                email: email || '',
+                                phone: phone || '',
+                                coffeePreferences: {},
+                                avatar: `https://ui-avatars.com/api/?name=${encodeURIComponent((firstName || '') + ' ' + (lastName || ''))}&size=200&background=D2691E&color=fff&bold=true`,
+                                memberSince: new Date().toLocaleString('en-US', { month: 'long', year: 'numeric' })
+                            };
+                            try { localStorage.setItem(profileKey, JSON.stringify(starterProfile)); } catch (e) { /* ignore */ }
+                        }
+                    }
+                } catch (e) {
+                    console.warn('profile: failed to mirror Django user to localStorage', e);
+                }
+            }
+
             // Check if user is logged in (via localStorage as fallback)
             const isLoggedIn = localStorage.getItem('isLoggedIn') === 'true';
             const currentUser = localStorage.getItem('currentUser');

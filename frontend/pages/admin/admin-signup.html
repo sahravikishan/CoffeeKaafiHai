@@ -681,7 +681,7 @@
                         <i class="fas fa-phone"></i>
                         Phone Number
                     </label>
-                    <input type="tel" class="form-control" id="phone" name="phone" placeholder="+91 98765 43210" required autocomplete="tel">
+                    <input type="tel" class="form-control" id="phone" name="phone" placeholder="9876543210" required autocomplete="tel" inputmode="numeric" pattern="\d{10}" maxlength="10" oninput="this.value=this.value.replace(/\\D/g,'').slice(0,10)">
                     <div class="invalid-feedback">Please enter a valid phone number.</div>
                 </div>
                 

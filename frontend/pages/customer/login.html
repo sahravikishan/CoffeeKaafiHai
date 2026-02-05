@@ -862,8 +862,10 @@
                 
                 // Load user data to global keys for compatibility
                 if (response.user) {
-                    localStorage.setItem('name', response.user.firstName + ' ' + response.user.lastName);
-                    localStorage.setItem('phone', response.user.lastName); // Assuming lastName for phone? Adjust if needed
+                    const firstName = response.user.firstName || '';
+                    const lastName = response.user.lastName || '';
+                    localStorage.setItem('name', `${firstName} ${lastName}`.trim());
+                    localStorage.setItem('phone', response.user.phone || '');
                 }
                 
                 // Clear any old global profile data
@@ -903,11 +905,23 @@
             }
         });
         
+        function clearLoginFields() {
+            const emailEl = document.getElementById('email');
+            const passEl = document.getElementById('password');
+            if (emailEl) emailEl.value = '';
+            if (passEl) passEl.value = '';
+        }
+
         // Check for existing session on page load
-        window.addEventListener('DOMContentLoaded', checkExistingSession);
+        window.addEventListener('DOMContentLoaded', function() {
+            checkExistingSession();
+            clearLoginFields();
+        });
         
-        // Auto-focus on email field
+        // Auto-focus on email field and ensure autofill is cleared
         window.addEventListener('load', function() {
+            clearLoginFields();
+            setTimeout(clearLoginFields, 50);
             document.getElementById('email').focus();
         });
     </script>
