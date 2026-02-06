@@ -207,6 +207,7 @@ async function handleLogin(email, password) {
                             lastName: serverUser.lastName || response.user.lastName || '',
                             email: serverUser.email || response.user.email || '',
                             phone: serverUser.phone || response.user.phone || '',
+                            address: serverUser.address || '',
                             coffeePreferences: serverUser.coffeePreferences || {},
                             avatar: serverUser.avatar || response.user.avatar || `https://ui-avatars.com/api/?name=${encodeURIComponent((response.user.firstName||'') + ' ' + (response.user.lastName||''))}&size=200&background=D2691E&color=fff&bold=true`,
                             memberSince: serverUser.memberSince || new Date().toLocaleString('en-US', { month: 'long', year: 'numeric' })
@@ -224,6 +225,7 @@ async function handleLogin(email, password) {
                                 lastName: response.user.lastName || '',
                                 email: response.user.email || '',
                                 phone: response.user.phone || '',
+                                address: '',
                                 coffeePreferences: {},
                                 avatar: response.user.avatar || `https://ui-avatars.com/api/?name=${encodeURIComponent((response.user.firstName||'') + ' ' + (response.user.lastName||''))}&size=200&background=D2691E&color=fff&bold=true`,
                                 memberSince: new Date().toLocaleString('en-US', { month: 'long', year: 'numeric' })
@@ -240,6 +242,7 @@ async function handleLogin(email, password) {
                             lastName: response.user.lastName || '',
                             email: response.user.email || '',
                             phone: response.user.phone || '',
+                            address: '',
                             coffeePreferences: {},
                             avatar: response.user.avatar || `https://ui-avatars.com/api/?name=${encodeURIComponent((response.user.firstName||'') + ' ' + (response.user.lastName||''))}&size=200&background=D2691E&color=fff&bold=true`,
                             memberSince: new Date().toLocaleString('en-US', { month: 'long', year: 'numeric' })
@@ -261,9 +264,11 @@ async function handleLogin(email, password) {
         try {
             const ordersResp = await getUserOrders();
             if (ordersResp && ordersResp.success && Array.isArray(ordersResp.orders)) {
-                try {
-                    localStorage.setItem(`orders_${email}`, JSON.stringify(ordersResp.orders));
-                } catch (e) { console.warn('Failed to persist orders locally', e); }
+                if (ordersResp.orders.length > 0) {
+                    try {
+                        localStorage.setItem(`orders_${email}`, JSON.stringify(ordersResp.orders));
+                    } catch (e) { console.warn('Failed to persist orders locally', e); }
+                }
             }
         } catch (e) {
             console.warn('Failed to fetch/persist orders on login', e);

@@ -2028,13 +2028,35 @@ function setupLogoutHandlers() {
     if (confirmLogoutBtn) {
         confirmLogoutBtn.addEventListener('click', async function() {
             try {
-                // PERMANENT FIX: Persist profile to backend BEFORE logout
-                if (userProfileData) {
-                    try {
-                        await persistProfileToBackend(userProfileData);
-                    } catch (e) {
-                        console.warn('logout: failed to persist profile before logout', e);
-                    }
+                if (!userProfileData) userProfileData = initializeUserProfile();
+
+                // Sync latest form values before persisting
+                try {
+                    userProfileData.firstName = document.getElementById('firstName')?.value || userProfileData.firstName || '';
+                    userProfileData.lastName = document.getElementById('lastName')?.value || userProfileData.lastName || '';
+                    userProfileData.email = document.getElementById('email')?.value || userProfileData.email || '';
+                    userProfileData.phone = document.getElementById('phone')?.value || userProfileData.phone || '';
+                    userProfileData.address = document.getElementById('address')?.value || userProfileData.address || '';
+
+                    if (!userProfileData.coffeePreferences) userProfileData.coffeePreferences = {};
+                    userProfileData.coffeePreferences.coffeeType = document.getElementById('coffeeType')?.value || userProfileData.coffeePreferences.coffeeType || '';
+                    userProfileData.coffeePreferences.milkPref = document.getElementById('milkPref')?.value || userProfileData.coffeePreferences.milkPref || '';
+                    userProfileData.coffeePreferences.sugarLevel = document.getElementById('sugarLevel')?.value || userProfileData.coffeePreferences.sugarLevel || '';
+                    userProfileData.coffeePreferences.cupSize = document.getElementById('cupSize')?.value || userProfileData.coffeePreferences.cupSize || '';
+                    userProfileData.coffeePreferences.temperature = document.getElementById('temperature')?.value || userProfileData.coffeePreferences.temperature || '';
+                    userProfileData.coffeePreferences.coffeeStrength = document.getElementById('coffeeStrength')?.value || userProfileData.coffeePreferences.coffeeStrength || '';
+
+                    const emailNotifEl = document.getElementById('emailNotif');
+                    const smsNotifEl = document.getElementById('smsNotif');
+                    if (emailNotifEl) userProfileData.coffeePreferences.emailNotif = !!emailNotifEl.checked;
+                    if (smsNotifEl) userProfileData.coffeePreferences.smsNotif = !!smsNotifEl.checked;
+                } catch (e) { /* ignore */ }
+
+                // Persist profile to backend BEFORE logout
+                try {
+                    await persistProfileToBackend(userProfileData);
+                } catch (e) {
+                    console.warn('logout: failed to persist profile before logout', e);
                 }
             } catch (e) {
                 console.warn('logout: failed during profile persistence', e);

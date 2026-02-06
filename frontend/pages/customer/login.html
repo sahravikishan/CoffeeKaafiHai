@@ -313,7 +313,8 @@
             gap: 10px;
         }
         
-        .auth-links a {
+        .auth-links a,
+        .auth-link {
             color: var(--accent);
             text-decoration: none;
             font-weight: 600;
@@ -322,7 +323,8 @@
             font-size: 0.95rem;
         }
         
-        .auth-links a::after {
+        .auth-links a::after,
+        .auth-link::after {
             content: '';
             position: absolute;
             bottom: -2px;
@@ -333,11 +335,13 @@
             transition: width 0.3s ease;
         }
         
-        .auth-links a:hover::after {
+        .auth-links a:hover::after,
+        .auth-link:hover::after {
             width: 100%;
         }
         
-        .auth-links a:hover {
+        .auth-links a:hover,
+        .auth-link:hover {
             color: var(--light-brown);
         }
         
@@ -645,7 +649,7 @@
                             Remember me
                         </label>
                     </div>
-                    <a href="{% url 'forgot_password' %}" style="font-size: 0.95rem;">Forgot Password?</a>
+                    <a href="{% url 'forgot_password' %}" class="auth-link">Forgot Password?</a>
                 </div>
                 
                 <button type="submit" class="btn-auth" id="loginBtn">
@@ -786,6 +790,8 @@
                 localStorage.setItem('userSession', JSON.stringify(sessionData));
                 localStorage.setItem('rememberMe', 'true');
             } else {
+                localStorage.removeItem('rememberMe');
+                localStorage.removeItem('userSession');
                 sessionStorage.setItem('userSession', JSON.stringify(sessionData));
             }
             
@@ -812,6 +818,10 @@
                         // Check remember me checkbox if remembered
                         if (rememberMe) {
                             document.getElementById('rememberMe').checked = true;
+                            const emailInput = document.getElementById('email');
+                            if (emailInput) {
+                                emailInput.value = session.email || localStorage.getItem('userEmail') || '';
+                            }
                         }
                     }
                 } catch (e) {
@@ -856,9 +866,7 @@
                 
                 // Successful login
                 loginAttempts = 0;
-                if (rememberMe) {
-                    createSession(email, rememberMe);
-                }
+                createSession(email, rememberMe);
                 
                 // Load user data to global keys for compatibility
                 if (response.user) {
@@ -905,9 +913,13 @@
             }
         });
         
-        function clearLoginFields() {
+        function clearLoginFields(force = false) {
             const emailEl = document.getElementById('email');
             const passEl = document.getElementById('password');
+            const rememberMe = localStorage.getItem('rememberMe') === 'true';
+            if (!force && rememberMe) {
+                return;
+            }
             if (emailEl) emailEl.value = '';
             if (passEl) passEl.value = '';
         }
