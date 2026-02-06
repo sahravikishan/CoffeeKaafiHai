@@ -94,7 +94,7 @@ class Order:
     """Order model for order management"""
     
     @staticmethod
-    def create(email, items, total_amount, status='pending'):
+    def create(email, items, total_amount, status='pending', extra_fields=None):
         """Create new order"""
         db = get_database()
         order = {
@@ -105,6 +105,8 @@ class Order:
             'createdAt': datetime.now(),
             'updatedAt': datetime.now()
         }
+        if isinstance(extra_fields, dict) and extra_fields:
+            order.update(extra_fields)
         result = db['orders'].insert_one(order)
         return result.inserted_id
     

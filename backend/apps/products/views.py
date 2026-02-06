@@ -6,6 +6,8 @@ These views handle JSON requests from the frontend.
 from django.http import JsonResponse
 from django.views.decorators.http import require_http_methods
 from django.views.decorators.csrf import csrf_exempt
+from django.contrib.auth import get_user_model
+from django.contrib.auth.decorators import login_required, user_passes_test
 import json
 from datetime import datetime, timedelta
 import random
@@ -268,18 +270,52 @@ def signup(request):
             return JsonResponse({
                 'message': 'Email already registered'
             }, status=400)
-        
+
+        # Create Django auth user for admin/permissions visibility
+        django_user = None
+        try:
+            user_model = get_user_model()
+            if user_model.objects.filter(username=email).exists() or user_model.objects.filter(email=email).exists():
+                return JsonResponse({
+                    'message': 'Email already registered'
+                }, status=400)
+            django_user = user_model.objects.create_user(username=email, email=email, password=password)
+            django_user.first_name = firstName
+            django_user.last_name = lastName
+            django_user.save()
+        except Exception as e:
+            print(f"Error creating Django user for {email}: {e}")
+            return JsonResponse({
+                'message': 'Unable to create account'
+            }, status=500)
+
         # Hash password with bcrypt before saving
         try:
             password_hash = bcrypt.hashpw(password.encode('utf-8'), bcrypt.gensalt()).decode('utf-8')
         except Exception as e:
+            if django_user:
+                try:
+                    django_user.delete()
+                except Exception:
+                    pass
             print(f"Error hashing password during signup for {email}: {e}")
             return JsonResponse({
                 'message': 'Internal error'
             }, status=500)
 
         # Save user to MongoDB
-        user_id = User.create(firstName, lastName, email, phone, password_hash)
+        try:
+            user_id = User.create(firstName, lastName, email, phone, password_hash)
+        except Exception as e:
+            if django_user:
+                try:
+                    django_user.delete()
+                except Exception:
+                    pass
+            print(f"Error creating Mongo user for {email}: {e}")
+            return JsonResponse({
+                'message': 'Unable to create account'
+            }, status=500)
 
         # Set minimal Django session for server-side authentication
         request.session['email'] = email
@@ -498,6 +534,44 @@ def profile(request):
         return JsonResponse({'success': False, 'message': str(e)}, status=500)
 
 
+
+# ==========================================
+# PROFILE + ORDER STATS UTILITIES
+# ==========================================
+
+def _compute_loyalty_stats(email):
+    """Compute loyalty stats from orders."""
+    try:
+        orders = Order.get_by_email(email)
+    except Exception:
+        orders = []
+
+    # Only count non-cancelled orders
+    active_orders = [o for o in orders if o.get('status') != 'cancelled']
+    total_orders = len(active_orders)
+
+    total_spent = 0
+    for o in active_orders:
+        try:
+            total_spent += float(o.get('totalAmount') or o.get('total') or 0)
+        except Exception:
+            pass
+
+    points = int(total_spent // 10)
+
+    member_tier = 'Bronze'
+    if total_orders > 20:
+        member_tier = 'Gold'
+    elif total_orders > 10:
+        member_tier = 'Silver'
+
+    return {
+        'totalOrders': total_orders,
+        'totalSpent': total_spent,
+        'loyaltyPoints': points,
+        'memberTier': member_tier
+    }
+
 # ==========================================
 # PAYMENT ENDPOINTS
 # ==========================================
@@ -522,28 +596,60 @@ def create_order(request):
         receipt = data.get('receipt')
         email = data.get('email')
         items = data.get('items', [])
-        
-        if not amount or not receipt:
+        status = data.get('status') or 'pending'
+
+        if not amount or not receipt or not email:
             return JsonResponse({
                 'success': False,
-                'message': 'Amount and receipt are required'
+                'message': 'Amount, receipt, and email are required'
             }, status=400)
-        
+
+        # Optional metadata from frontend
+        extra_fields = {
+            'clientOrderId': data.get('clientOrderId'),
+            'orderType': data.get('orderType'),
+            'deliveryAddress': data.get('deliveryAddress'),
+            'paymentMethod': data.get('paymentMethod'),
+            'paymentStatus': data.get('paymentStatus'),
+            'subtotal': data.get('subtotal'),
+            'tax': data.get('tax')
+        }
+
         # Create order in MongoDB
-        order_id = Order.create(email, items, amount, status='pending')
-        
+        order_id = Order.create(email, items, amount, status=status, extra_fields=extra_fields)
+
         # TODO: Create order in Razorpay using razorpay SDK
-        
         razorpay_order_id = f'order_{datetime.now().timestamp()}'.replace('.', '_')
-        
+
         # Create payment record in MongoDB
         Payment.create(str(order_id), email, amount, razorpay_order_id, status='pending')
-        
+
+        # Update user profile summary fields (stats + last order)
+        try:
+            stats = _compute_loyalty_stats(email)
+            User.update(email, {
+                **stats,
+                'lastOrderItems': items,
+                'lastOrderAt': datetime.now().isoformat()
+            })
+        except Exception as e:
+            print(f"Profile stats update failed for {email}: {e}")
+            stats = None
+
         return JsonResponse({
             'success': True,
             'razorpay_order_id': razorpay_order_id,
             'amount': amount,
-            'currency': currency
+            'currency': currency,
+            'order': {
+                'orderId': str(order_id),
+                'clientOrderId': extra_fields.get('clientOrderId'),
+                'email': email,
+                'items': items,
+                'totalAmount': amount,
+                'status': status
+            },
+            'stats': stats
         })
         
     except json.JSONDecodeError:
@@ -591,11 +697,19 @@ def verify_payment(request):
         if payment:
             # Update payment status to verified in MongoDB
             Payment.update_status(payment['_id'], 'verified', payment_id, signature)
-            
+
             # Update order status
             order_id_str = payment.get('orderId')
             if order_id_str:
                 Order.update_status(order_id_str, 'paid')
+
+            # Refresh user loyalty stats after successful payment
+            try:
+                if email:
+                    stats = _compute_loyalty_stats(email)
+                    User.update(email, stats)
+            except Exception as e:
+                print(f"Profile stats refresh failed for {email}: {e}")
         
         return JsonResponse({
             'verified': True,
@@ -689,10 +803,20 @@ def get_orders(request):
         # Fetch orders from MongoDB
         orders = Order.get_by_email(email)
         
-        # Convert ObjectId to string for JSON serialization
+        # Convert ObjectId to string and normalize fields for frontend
         orders_data = []
         for order in orders:
             order['_id'] = str(order['_id'])
+            order['orderId'] = order.get('orderId') or order.get('clientOrderId') or order.get('_id')
+            if 'total' not in order:
+                order['total'] = order.get('totalAmount')
+            if 'date' not in order:
+                order['date'] = order.get('orderDate') or order.get('createdAt')
+            if 'dateDisplay' not in order and order.get('createdAt'):
+                try:
+                    order['dateDisplay'] = order.get('createdAt').isoformat() if hasattr(order.get('createdAt'), 'isoformat') else str(order.get('createdAt'))
+                except Exception:
+                    order['dateDisplay'] = str(order.get('createdAt'))
             orders_data.append(order)
         
         return JsonResponse({
@@ -744,3 +868,60 @@ def get_payments(request):
             'success': False,
             'message': str(e)
         }, status=500)
+
+
+# ==========================================
+# ADMIN MONGO USER MANAGEMENT
+# ==========================================
+
+@login_required
+@user_passes_test(lambda u: u.is_staff or u.is_superuser)
+@csrf_exempt
+@require_http_methods(["GET"])
+def admin_mongo_users(request):
+    """List MongoDB users for admin dashboard (excludes passwords)."""
+    try:
+        db = get_database()
+        users = list(db['users'].find({}, {'password': 0}))
+        for user in users:
+            if '_id' in user:
+                user['_id'] = str(user['_id'])
+        return JsonResponse({'users': users})
+    except Exception as e:
+        return JsonResponse({'message': str(e)}, status=500)
+
+
+@login_required
+@user_passes_test(lambda u: u.is_staff or u.is_superuser)
+@csrf_exempt
+@require_http_methods(["PATCH", "DELETE"])
+def admin_mongo_user_detail(request, email):
+    """Update or delete a MongoDB user by email."""
+    try:
+        if request.method == "DELETE":
+            db = get_database()
+            result = db['users'].delete_one({'email': email})
+            if result.deleted_count == 0:
+                return JsonResponse({'message': 'User not found'}, status=404)
+            return JsonResponse({'message': 'User deleted'})
+
+        data = json.loads(request.body or '{}')
+        update_fields = {}
+        for field in ('firstName', 'lastName', 'phone'):
+            if field in data and data[field] is not None:
+                update_fields[field] = data[field]
+
+        if not update_fields:
+            return JsonResponse({'message': 'No fields to update'}, status=400)
+
+        User.update(email, update_fields)
+        updated = User.find_by_email(email)
+        if updated and '_id' in updated:
+            updated['_id'] = str(updated['_id'])
+        if updated and 'password' in updated:
+            del updated['password']
+        return JsonResponse({'message': 'User updated', 'user': updated})
+    except json.JSONDecodeError:
+        return JsonResponse({'message': 'Invalid JSON'}, status=400)
+    except Exception as e:
+        return JsonResponse({'message': str(e)}, status=500)

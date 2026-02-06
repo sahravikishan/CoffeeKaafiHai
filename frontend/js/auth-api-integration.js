@@ -266,7 +266,14 @@ async function handleLogin(email, password) {
             if (ordersResp && ordersResp.success && Array.isArray(ordersResp.orders)) {
                 if (ordersResp.orders.length > 0) {
                     try {
-                        localStorage.setItem(`orders_${email}`, JSON.stringify(ordersResp.orders));
+                        const normalized = ordersResp.orders.map(o => ({
+                            ...o,
+                            orderId: o.orderId || o.id || o._id || o.clientOrderId || '',
+                            total: (typeof o.total === 'number') ? o.total : (typeof o.totalAmount === 'number' ? o.totalAmount : Number(o.totalAmount || o.total || 0)),
+                            date: o.date || o.orderDate || o.createdAt || '',
+                            dateDisplay: o.dateDisplay || (o.createdAt ? new Date(o.createdAt).toLocaleString() : '')
+                        }));
+                        localStorage.setItem(`orders_${email}`, JSON.stringify(normalized));
                     } catch (e) { console.warn('Failed to persist orders locally', e); }
                 }
             }
@@ -450,7 +457,7 @@ async function getUserPayments() {
 /**
  * Create order with backend
  */
-async function createOrder(items, totalAmount) {
+async function createOrder(items, totalAmount, extra = {}) {
     try {
         const email = localStorage.getItem('userEmail');
         if (!email) {
@@ -462,7 +469,8 @@ async function createOrder(items, totalAmount) {
             items: items,
             amount: totalAmount,
             currency: 'INR',
-            receipt: `order_${Date.now()}`
+            receipt: `order_${Date.now()}`,
+            ...extra
         });
         
         return response;

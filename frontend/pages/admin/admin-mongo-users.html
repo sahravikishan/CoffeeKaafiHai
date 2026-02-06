@@ -1,0 +1,152 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Mongo Users Admin</title>
+  <link rel="stylesheet" href="/css/style.css" />
+  <style>
+    body { background: #f6f7fb; color: #1b1f24; }
+    .wrap { max-width: 1100px; margin: 40px auto; padding: 24px; background: #fff; border-radius: 14px; box-shadow: 0 10px 30px rgba(0,0,0,0.08); }
+    .header { display: flex; align-items: center; justify-content: space-between; gap: 12px; }
+    .header h1 { font-size: 24px; margin: 0; }
+    .header a { text-decoration: none; color: #2a6bff; font-weight: 600; }
+    .toolbar { margin: 16px 0; display: flex; gap: 10px; }
+    .toolbar input { padding: 10px 12px; border: 1px solid #d7dbe3; border-radius: 8px; width: 260px; }
+    table { width: 100%; border-collapse: collapse; }
+    th, td { padding: 10px 8px; border-bottom: 1px solid #eef0f4; text-align: left; }
+    th { font-size: 12px; text-transform: uppercase; letter-spacing: 0.06em; color: #647081; }
+    td input { width: 100%; padding: 6px 8px; border: 1px solid #d7dbe3; border-radius: 6px; }
+    .btn { padding: 6px 10px; border: 0; border-radius: 6px; cursor: pointer; font-weight: 600; }
+    .btn.save { background: #2a6bff; color: #fff; }
+    .btn.delete { background: #ff3b3b; color: #fff; }
+    .status { margin-top: 12px; font-size: 13px; color: #5a6575; }
+  </style>
+</head>
+<body>
+  <div class="wrap">
+    <div class="header">
+      <h1>MongoDB Users</h1>
+      <a href="/admin/dashboard/">Back to Admin Dashboard</a>
+    </div>
+
+    <div class="toolbar">
+      <input id="search" type="text" placeholder="Search by email" />
+    </div>
+
+    <div style="overflow-x:auto;">
+      <table id="users-table">
+        <thead>
+          <tr>
+            <th>Email</th>
+            <th>First Name</th>
+            <th>Last Name</th>
+            <th>Phone</th>
+            <th>Actions</th>
+          </tr>
+        </thead>
+        <tbody></tbody>
+      </table>
+    </div>
+
+    <div class="status" id="status">Loading users...</div>
+  </div>
+
+  <script>
+    const tableBody = document.querySelector('#users-table tbody');
+    const statusEl = document.getElementById('status');
+    const searchInput = document.getElementById('search');
+    let users = [];
+
+    function setStatus(msg) {
+      statusEl.textContent = msg;
+    }
+
+    function renderRows(list) {
+      tableBody.innerHTML = '';
+      if (!list.length) {
+        tableBody.innerHTML = '<tr><td colspan="5">No users found.</td></tr>';
+        return;
+      }
+
+      list.forEach(u => {
+        const tr = document.createElement('tr');
+        tr.innerHTML = `
+          <td>${u.email || ''}</td>
+          <td><input value="${u.firstName || ''}" data-field="firstName" /></td>
+          <td><input value="${u.lastName || ''}" data-field="lastName" /></td>
+          <td><input value="${u.phone || ''}" data-field="phone" /></td>
+          <td>
+            <button class="btn save">Save</button>
+            <button class="btn delete">Delete</button>
+          </td>
+        `;
+
+        tr.querySelector('.save').addEventListener('click', async () => {
+          const inputs = tr.querySelectorAll('input');
+          const payload = {};
+          inputs.forEach(i => payload[i.dataset.field] = i.value.trim());
+          await updateUser(u.email, payload);
+        });
+
+        tr.querySelector('.delete').addEventListener('click', async () => {
+          if (!confirm(`Delete user ${u.email}?`)) return;
+          await deleteUser(u.email);
+        });
+
+        tableBody.appendChild(tr);
+      });
+    }
+
+    async function loadUsers() {
+      try {
+        const res = await fetch('/api/admin/mongo-users/');
+        const data = await res.json();
+        users = data.users || [];
+        renderRows(users);
+        setStatus(`Loaded ${users.length} users.`);
+      } catch (e) {
+        setStatus('Failed to load users.');
+      }
+    }
+
+    async function updateUser(email, payload) {
+      try {
+        const res = await fetch(`/api/admin/mongo-users/${encodeURIComponent(email)}/`, {
+          method: 'PATCH',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(payload)
+        });
+        const data = await res.json();
+        if (!res.ok) throw new Error(data.message || 'Update failed');
+        setStatus(`Updated ${email}`);
+        await loadUsers();
+      } catch (e) {
+        setStatus(e.message);
+      }
+    }
+
+    async function deleteUser(email) {
+      try {
+        const res = await fetch(`/api/admin/mongo-users/${encodeURIComponent(email)}/`, {
+          method: 'DELETE'
+        });
+        const data = await res.json();
+        if (!res.ok) throw new Error(data.message || 'Delete failed');
+        setStatus(`Deleted ${email}`);
+        await loadUsers();
+      } catch (e) {
+        setStatus(e.message);
+      }
+    }
+
+    searchInput.addEventListener('input', () => {
+      const q = searchInput.value.trim().toLowerCase();
+      if (!q) return renderRows(users);
+      renderRows(users.filter(u => (u.email || '').toLowerCase().includes(q)));
+    });
+
+    loadUsers();
+  </script>
+</body>
+</html>

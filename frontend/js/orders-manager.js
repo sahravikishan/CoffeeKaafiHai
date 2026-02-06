@@ -487,7 +487,11 @@ function calculateProfileStats() {
     const activeOrders = allOrders.filter(order => order.status !== 'cancelled');
     const totalOrders = activeOrders.length;
     
-    const totalSpent = activeOrders.reduce((sum, order) => sum + (order.total || 0), 0);
+    const totalSpent = activeOrders.reduce((sum, order) => sum + (
+        (typeof order.total === 'number') ? order.total : (
+            (typeof order.totalAmount === 'number') ? order.totalAmount : Number(order.totalAmount || order.total || order.amount || 0)
+        )
+    ), 0);
     const points = Math.floor(totalSpent / 10);
     
     let memberTier = 'Bronze';
@@ -583,8 +587,10 @@ function displayRecentOrders(limit) {
                            (order.orderDate ? new Date(order.orderDate).toLocaleString() : ''));
         
         const totalAmount = (typeof order.total === 'number') ? order.total : 
+                           (typeof order.totalAmount === 'number') ? order.totalAmount : 
                            (order.total ? Number(order.total) : 
-                           (order.subtotal ? order.subtotal + (order.tax || 0) : 0));
+                           (order.totalAmount ? Number(order.totalAmount) : 
+                           (order.subtotal ? order.subtotal + (order.tax || 0) : 0)));
 
         const canCancel = order.status !== 'delivered' && order.status !== 'cancelled';
 
@@ -633,9 +639,12 @@ function attachCancelOrderHandlers(container, displayLimit) {
 /**
  * Add a new order to the user's order history
  * @param {Object} orderData - Order data object
+ * @param {Object} [options] - Optional flags
+ * @param {boolean} [options.suppressToast=false] - Skip success toast
  * @returns {Object|null} Created order or null if failed
  */
-function addNewOrder(orderData) {
+function addNewOrder(orderData, options = {}) {
+    const suppressToast = !!options.suppressToast;
     // Persist orders per user
     const isLoggedIn = localStorage.getItem('isLoggedIn') === 'true';
     if (!isLoggedIn) {
@@ -700,7 +709,9 @@ function addNewOrder(orderData) {
     window.dispatchEvent(new CustomEvent('ordersUpdated', { detail: allOrders }));
 
     displayRecentOrders();
-    showToast('New order placed successfully!', 'success');
+    if (!suppressToast) {
+        showToast('New order placed successfully!', 'success');
+    }
     return newOrder;
 }
 
@@ -1566,6 +1577,11 @@ function saveNotificationPreferences(prefs) {
    Purpose: Toast notifications and modal management
 ========================================================= */
 
+/**
+ * Show toast notification
+ * @param {string} message - Message to display
+ * @param {string} type - Type of toast (success, error, warning, info)
+ */
 /**
  * Show toast notification
  * @param {string} message - Message to display

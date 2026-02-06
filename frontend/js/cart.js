@@ -49,7 +49,7 @@ class CartManager {
 
         this.updateCartCount();
         this.notifyCartUpdate();
-        this.showToast(`${item.name} (${size}) added to cart!`, 'success');
+        // Toast removed to avoid duplicate popups (menu modal already shows feedback)
         this.animateCartIcon();
         return true; // Indicate added
     }
@@ -191,6 +191,14 @@ class CartManager {
 
     // Show toast notification - ENHANCED
     showToast(message, type = 'success') {
+        // Suppress all success toasts from cart manager to avoid duplicate add-to-cart popups
+        if (type === 'success') {
+            return;
+        }
+        // Also suppress any "added to cart" toast to prevent duplicate popups
+        if (typeof message === 'string' && message.toLowerCase().includes('added to cart')) {
+            return;
+        }
         // Prefer a single global in-page toast if available, then DynamicProfileManager, then fallback local toast
         if (window.showToast && typeof window.showToast === 'function') {
             try { window.showToast(message, type); return; } catch (e) { /* fallback below */ }

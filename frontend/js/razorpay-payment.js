@@ -541,7 +541,8 @@ class RazorpayPaymentGateway {
                 body: JSON.stringify({
                     razorpay_order_id: paymentData.razorpay_order_id,
                     razorpay_payment_id: paymentData.razorpay_payment_id,
-                    razorpay_signature: paymentData.razorpay_signature
+                    razorpay_signature: paymentData.razorpay_signature,
+                    email: localStorage.getItem('userEmail') || ''
                 })
             });
 

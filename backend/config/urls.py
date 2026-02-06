@@ -10,7 +10,7 @@ from apps.products.template_views import (
     login, signup, forgot_password, reset_password,
     customer_profile, order_tracking,
     admin_login, admin_signup, admin_forgot_password,
-    admin_reset_password, admin_dashboard
+    admin_reset_password, admin_dashboard, admin_mongo_users
 )
 
 # Base directory of the project (parent of `backend`)
@@ -49,18 +49,22 @@ urlpatterns = [
     path('order-tracking/', order_tracking, name='order_tracking'),
     
     # Admin Auth Pages
+    path('admin/mongo-users/', admin_mongo_users, name='admin_mongo_users'),
     path('admin/login/', admin_login, name='admin_login'),
     path('admin/signup/', admin_signup, name='admin_signup'),
     path('admin/forgot-password/', admin_forgot_password, name='admin_forgot_password'),
     path('admin/reset-password/', admin_reset_password, name='admin_reset_password'),
     path('admin/dashboard/', admin_dashboard, name='admin_dashboard'),
     # Redirect direct admin HTML access to canonical admin routes
+    path('admin-mongo-users.html', lambda req: redirect('admin_mongo_users')),
     path('admin-login.html', lambda req: redirect('admin_login')),
     path('admin-signup.html', lambda req: redirect('admin_signup')),
     path('admin-forgot-password.html', lambda req: redirect('admin_forgot_password')),
     path('admin-reset-password.html', lambda req: redirect('admin_reset_password')),
     path('admin-dashboard.html', lambda req: redirect('admin_dashboard')),
     
+    path('admin/', lambda req: redirect('/admin-panel/')) ,
+
     # Development-only: serve frontend static files (CSS/JS/images) from the frontend folder
     # This fallback will serve files like js/, css/, images/, etc.
     re_path(r'^(?P<path>.*)$', serve, {

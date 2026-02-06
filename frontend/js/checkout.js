@@ -718,8 +718,31 @@ class CheckoutManager {
 
     saveOrder(order) {
         try {
+            // Persist to backend for profile + loyalty stats
+            if (typeof createOrder === 'function') {
+                const extra = {
+                    status: (order.paymentStatus === 'paid') ? 'paid' : (order.status || 'pending'),
+                    clientOrderId: order.orderId,
+                    orderType: order.orderType || '',
+                    deliveryAddress: order.deliveryAddress || '',
+                    paymentMethod: order.paymentMethod || '',
+                    paymentStatus: order.paymentStatus || '',
+                    subtotal: order.subtotal || 0,
+                    tax: order.tax || 0
+                };
+                createOrder(order.items || [], order.total || 0, extra)
+                    .then((resp) => {
+                        if (resp && resp.order && resp.order.orderId) {
+                            order.backendOrderId = resp.order.orderId;
+                        }
+                    })
+                    .catch((e) => {
+                        console.warn('saveOrder: backend persist failed', e);
+                    });
+            }
+
             if (typeof addNewOrder === 'function') {
-                addNewOrder(order);
+                addNewOrder(order, { suppressToast: true });
                 return;
             }
 

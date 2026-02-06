@@ -7,6 +7,7 @@ from django.shortcuts import render, redirect
 from django.http import JsonResponse
 from database.models import User, Order, Payment
 from django.views.decorators.csrf import ensure_csrf_cookie
+from django.contrib.auth.decorators import login_required, user_passes_test
 
 
 # ==========================================
@@ -209,3 +210,10 @@ def admin_dashboard(request):
         print(f"Error fetching admin data: {e}")
 
     return render(request, 'pages/admin/admin-dashboard.html', context)
+
+@login_required
+@user_passes_test(lambda u: u.is_staff or u.is_superuser)
+@ensure_csrf_cookie
+def admin_mongo_users(request):
+    """Render admin page for MongoDB user management."""
+    return render(request, 'pages/admin/admin-mongo-users.html')

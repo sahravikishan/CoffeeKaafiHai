@@ -78,6 +78,11 @@
     color: #00C851;
 }
 
+/* Suppress success toasts from the cart toast container to avoid duplicate add-to-cart popups */
+#toastContainer .cart-toast-success {
+    display: none !important;
+}
+
 .cart-toast-error {
     border-left-color: #ff4444;
     color: #ff4444;

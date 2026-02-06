@@ -21,6 +21,10 @@ urlpatterns = [
     path('auth/forgot-password/', views.forgot_password, name='api_forgot_password'),
     path('auth/reset-password/', views.reset_password, name='api_reset_password'),
     
+    # Admin Mongo User Management
+    path('admin/mongo-users/', views.admin_mongo_users, name='admin_mongo_users'),
+    path('admin/mongo-users/<str:email>/', views.admin_mongo_user_detail, name='admin_mongo_user_detail'),
+
     # Payment Endpoints
     path('payment/create-order/', views.create_order, name='create_order'),
     path('payment/verify-payment/', views.verify_payment, name='verify_payment'),
