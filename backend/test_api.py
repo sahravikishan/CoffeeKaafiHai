@@ -44,26 +44,43 @@ def test_profile_api():
     except Exception as e:
         print(f"  ! Warning: {e}\n")
     
-    # Step 2: Test GET /api/auth/profile/
-    print("Step 2: GET profile endpoint")
+    # Step 2: Login to establish Django session
+    print("Step 2: Login to establish session")
     try:
-        response = client.get(f'/api/auth/profile/?email={test_email}')
+        response = client.post(
+            '/api/auth/login/',
+            data=json.dumps({'email': test_email, 'password': test_password}),
+            content_type='application/json'
+        )
+        print(f"  Response status: {response.status_code}")
+        
+        if response.status_code == 200:
+            print("  OK Logged in\n")
+        else:
+            print(f"  ERROR Login failed: {response.content}\n")
+    except Exception as e:
+        print(f"  ERROR Failed: {e}\n")
+    
+    # Step 3: GET /profile/ (session-auth)
+    print("Step 3: GET profile endpoint (session-auth)")
+    try:
+        response = client.get('/profile/', HTTP_ACCEPT='application/json')
         print(f"  Response status: {response.status_code}")
         
         if response.status_code == 200:
             data = response.json()
-            print(f"  ✓ Profile retrieved")
+            print(f"  OK Profile retrieved")
             print(f"    - Name: {data.get('user', {}).get('firstName')} {data.get('user', {}).get('lastName')}")
             print(f"    - Email: {data.get('user', {}).get('email')}\n")
         else:
-            print(f"  ✗ Error: {response.content}\n")
+            print(f"  ERROR Error: {response.content}\n")
     except Exception as e:
-        print(f"  ✗ Failed: {e}\n")
+        print(f"  ERROR Failed: {e}\n")
     
-    # Step 3: Test POST /api/auth/profile/ (Save profile)
-    print("Step 3: POST profile endpoint (Save profile)")
+    # Step 4: POST /profile/ (Save profile)
+    print("Step 4: POST profile endpoint (Save profile)")
     profile_data = {
-        'email': test_email,
+        'source': 'profile',
         'firstName': 'John',
         'lastName': 'Doe',
         'phone': '+91 9876543210',
@@ -83,29 +100,30 @@ def test_profile_api():
     
     try:
         response = client.post(
-            '/api/auth/profile/',
+            '/profile/',
             data=json.dumps(profile_data),
-            content_type='application/json'
+            content_type='application/json',
+            HTTP_ACCEPT='application/json'
         )
         print(f"  Response status: {response.status_code}")
         
         if response.status_code == 200:
             data = response.json()
-            print(f"  ✓ Profile saved successfully")
+            print(f"  OK Profile saved successfully")
             print(f"    - {data.get('message')}\n")
         else:
-            print(f"  ! Response: {response.content.decode()}\n")
+            print(f"  ERROR Response: {response.content.decode()}\n")
     except Exception as e:
-        print(f"  ✗ Failed: {e}\n")
+        print(f"  ERROR Failed: {e}\n")
     
-    # Step 4: GET profile again to verify persistence
-    print("Step 4: GET profile to verify data persisted")
+    # Step 5: GET profile again to verify persistence
+    print("Step 5: GET profile to verify data persisted")
     try:
-        response = client.get(f'/api/auth/profile/?email={test_email}')
+        response = client.get('/profile/', HTTP_ACCEPT='application/json')
         
         if response.status_code == 200:
             user = response.json().get('user', {})
-            print(f"  ✓ Data persisted in MongoDB:")
+            print(f"  OK Data persisted in MongoDB:")
             print(f"    - Name: {user.get('firstName')} {user.get('lastName')}")
             print(f"    - Address: {user.get('address')}")
             
@@ -116,11 +134,11 @@ def test_profile_api():
                 print(f"    - Cup Size: {prefs.get('cupSize')}")
                 print(f"    - Avatar: {user.get('avatar')}\n")
             else:
-                print(f"    • Coffee preferences: {prefs}\n")
+                print(f"    - Coffee preferences: {prefs}\n")
         else:
-            print(f"  ✗ Failed to retrieve: {response.content}\n")
+            print(f"  ERROR Failed to retrieve: {response.content}\n")
     except Exception as e:
-        print(f"  ✗ Failed: {e}\n")
+        print(f"  ERROR Failed: {e}\n")
     
     print("="*70)
     print("✓ API TEST COMPLETE")

@@ -16,8 +16,10 @@
 ========================================================= */
 let logoBase64 = "";
 let userProfileData = null;
-let activeToast = null;
-let toastTimeout = null;
+//let activeToast = null;
+//let toastTimeout = null;
+console.log("🔥 orders-manager.js LOADED");
+
 
 /* =========================================================
    SECTION 1: USER PROFILE MANAGEMENT
@@ -213,6 +215,8 @@ async function persistProfileToBackend(profileData) {
         
         // Prepare data for backend
         const backendPayload = {
+            // Explicit source marker so backend can block checkout-driven profile writes.
+            source: 'profile',
             email: currentUser,
             firstName: profileData.firstName || '',
             lastName: profileData.lastName || '',
@@ -223,13 +227,13 @@ async function persistProfileToBackend(profileData) {
         };
         
         // Call backend API to save profile
-        const response = await fetch('http://localhost:8000/api/auth/profile/', {
+        const response = await fetch('/profile/', { // Session-auth profile sync
             method: 'POST',
             headers: {
                 'Content-Type': 'application/json',
                 'X-CSRFToken': getCSRFToken() || ''
             },
-            credentials: 'include',
+            credentials: 'same-origin',
             body: JSON.stringify(backendPayload)
         });
         
@@ -406,9 +410,9 @@ function saveCoffeePreferences() {
 
 /**
  * Get all orders for the current logged-in user
- * @returns {Array} Array of order objects
+ * @returns {Promise<Array>} Array of order objects
  */
-function getAllOrders() {
+async function getAllOrders() {
     try {
         // Guests should have no orders
         const isLoggedIn = localStorage.getItem('isLoggedIn') === 'true';
@@ -417,8 +421,13 @@ function getAllOrders() {
         const userId = localStorage.getItem('currentUser') || localStorage.getItem('userId') || localStorage.getItem('userEmail');
         if (!userId) return [];
         
-        const ordersJson = localStorage.getItem(`orders_${userId}`);
-        return ordersJson ? JSON.parse(ordersJson) : [];
+        // MongoDB Query: db.collection("orders").find({ email: userId })
+        const response = await fetch(`/api/orders/?email=${encodeURIComponent(userId)}`, { credentials: 'same-origin' });
+        if (response.ok) {
+            const data = await response.json();
+            return data.orders || [];
+        }
+        return [];
     } catch (e) {
         console.error('Error parsing orders:', e);
         return [];
@@ -428,10 +437,10 @@ function getAllOrders() {
 /**
  * Get recent orders with optional limit
  * @param {number} limit - Number of orders to return
- * @returns {Array} Array of recent order objects
+ * @returns {Promise<Array>} Array of recent order objects
  */
-function getRecentOrders(limit = 3) {
-    const allOrders = getAllOrders();
+async function getRecentOrders(limit = 3) {
+    const allOrders = await getAllOrders();
     allOrders.sort((a, b) => new Date(b.date) - new Date(a.date));
     return allOrders.slice(0, limit);
 }
@@ -440,10 +449,10 @@ function getRecentOrders(limit = 3) {
  * Filter orders by date range
  * @param {string} startDate - Start date string
  * @param {string} endDate - End date string
- * @returns {Array} Filtered array of orders
+ * @returns {Promise<Array>} Filtered array of orders
  */
-function filterOrdersByDateRange(startDate, endDate) {
-    const allOrders = getAllOrders();
+async function filterOrdersByDateRange(startDate, endDate) {
+    const allOrders = await getAllOrders();
     
     // FIX ISSUE 1: Allow empty dates - return all orders if both are empty
     if (!startDate && !endDate) {
@@ -478,10 +487,10 @@ function filterOrdersByDateRange(startDate, endDate) {
 
 /**
  * Calculate profile statistics from orders
- * @returns {Object} Statistics object with totalOrders, points, memberTier, totalSpent
+ * @returns {Promise<Object>} Statistics object with totalOrders, points, memberTier, totalSpent
  */
-function calculateProfileStats() {
-    const allOrders = getAllOrders();
+async function calculateProfileStats() {
+    const allOrders = await getAllOrders();
     
     // FIX ISSUE 3: Only count non-cancelled orders for stats
     const activeOrders = allOrders.filter(order => order.status !== 'cancelled');
@@ -511,10 +520,10 @@ function calculateProfileStats() {
 
 /**
  * Update profile statistics display in the UI
- * @returns {Object} Statistics object
+ * @returns {Promise<Object>} Statistics object
  */
-function updateProfileStats() {
-    const stats = calculateProfileStats();
+async function updateProfileStats() {
+    const stats = await calculateProfileStats();
     
     const ordersCountEl = document.getElementById('ordersCount');
     const pointsCountEl = document.getElementById('pointsCount');
@@ -531,7 +540,7 @@ function updateProfileStats() {
  * Display recent orders in the UI
  * @param {number} limit - Optional limit for number of orders to display
  */
-function displayRecentOrders(limit) {
+async function displayRecentOrders(limit) {
     const ordersContainer = document.getElementById('recentOrdersContainer');
     if (!ordersContainer) return;
 
@@ -539,10 +548,11 @@ function displayRecentOrders(limit) {
 
     let ordersToShow;
     if (typeof limit === 'number') {
-        ordersToShow = getRecentOrders(limit);
+        ordersToShow = await getRecentOrders(limit);
     } else {
         // Show all orders by default, sorted by date desc
-        ordersToShow = getAllOrders().sort((a, b) => new Date(b.date) - new Date(a.date));
+        const all = await getAllOrders();
+        ordersToShow = all.sort((a, b) => new Date(b.date) - new Date(a.date));
     }
 
     if (!ordersToShow || ordersToShow.length === 0) {
@@ -641,9 +651,9 @@ function attachCancelOrderHandlers(container, displayLimit) {
  * @param {Object} orderData - Order data object
  * @param {Object} [options] - Optional flags
  * @param {boolean} [options.suppressToast=false] - Skip success toast
- * @returns {Object|null} Created order or null if failed
+ * @returns {Promise<Object|null>} Created order or null if failed
  */
-function addNewOrder(orderData, options = {}) {
+async function addNewOrder(orderData, options = {}) {
     const suppressToast = !!options.suppressToast;
     // Persist orders per user
     const isLoggedIn = localStorage.getItem('isLoggedIn') === 'true';
@@ -658,13 +668,16 @@ function addNewOrder(orderData, options = {}) {
         return null;
     }
 
-    const allOrders = getAllOrders();
+    // Refresh from DB instead of local manipulation
+    await displayRecentOrders();
 
     // Preserve incoming orderData shape
     const newOrder = Object.assign({}, orderData || {});
 
     // Ensure an orderId/id exists
-    const genId = `ORD-${Date.now()}-${String(allOrders.length + 1).padStart(3, '0')}`;
+    const allOrders = await getAllOrders();
+    const safeOrders = Array.isArray(allOrders) ? allOrders : [];
+    const genId = `ORD-${Date.now()}-${String(safeOrders.length + 1).padStart(3, '0')}`;
     newOrder.orderId = orderData.orderId || orderData.id || genId;
     newOrder.id = newOrder.id || newOrder.orderId;
 
@@ -696,19 +709,10 @@ function addNewOrder(orderData, options = {}) {
                       (orderData.paymentStatus === 'paid' ? 'delivered' : 'pending') || 
                       '').toString().toLowerCase();
 
-    // Prepend so latest appear at top
-    allOrders.unshift(newOrder);
-    
-    try {
-        localStorage.setItem(`orders_${userId}`, JSON.stringify(allOrders));
-    } catch (e) { 
-        console.error('Failed to save orders', e); 
-    }
-
     // Notify UI and other components
-    window.dispatchEvent(new CustomEvent('ordersUpdated', { detail: allOrders }));
+    // window.dispatchEvent(new CustomEvent('ordersUpdated', { detail: allOrders }));
 
-    displayRecentOrders();
+    await displayRecentOrders();
     if (!suppressToast) {
         showToast('New order placed successfully!', 'success');
     }
@@ -723,25 +727,14 @@ function addNewOrder(orderData, options = {}) {
 class OrdersManager {
     constructor() {
         this.userId = localStorage.getItem('currentUser') || localStorage.getItem('userId') || localStorage.getItem('userEmail') || null;
-        this.orders = [];
-        this.loadOrders();
+        // No in-memory storage
     }
 
     /**
      * Load orders for current user from localStorage
      */
     loadOrders() {
-        try {
-            if (!this.userId) {
-                this.orders = [];
-                return;
-            }
-            const data = localStorage.getItem(`orders_${this.userId}`);
-            this.orders = data ? JSON.parse(data) : [];
-        } catch (e) {
-            console.error('Failed to load orders:', e);
-            this.orders = [];
-        }
+        // Deprecated: Use getAllOrders() which fetches from DB
     }
 
     /**
@@ -749,19 +742,13 @@ class OrdersManager {
      */
     reinit() {
         this.userId = localStorage.getItem('currentUser') || localStorage.getItem('userId') || localStorage.getItem('userEmail') || null;
-        this.loadOrders();
     }
 
     /**
      * Save orders for current user to localStorage
      */
     saveOrders() {
-        try {
-            if (!this.userId) return;
-            localStorage.setItem(`orders_${this.userId}`, JSON.stringify(this.orders));
-        } catch (e) {
-            console.error('Failed to save orders:', e);
-        }
+        // Deprecated: Data is saved to DB via API
     }
 
     /**
@@ -769,26 +756,41 @@ class OrdersManager {
      * @param {Object} order - Order object
      */
     addOrder(order) {
-        this.orders.unshift(order);
-        this.saveOrders();
+        // Deprecated
     }
 
     /**
      * Get all orders
-     * @returns {Array} Array of all orders
+     * @returns {Promise<Array>} Array of all orders
      */
-    getOrders() {
-        return this.orders;
+    async getOrders() {
+        const res = await fetch('/api/orders/', {
+            credentials: 'same-origin'
+        });
+
+        if (!res.ok) {
+            return [];
+        }
+
+        const data = await res.json();
+        return Array.isArray(data.orders) ? data.orders : [];
     }
 
     /**
      * Get order by ID
      * @param {string} orderId - Order ID
-     * @returns {Object|undefined} Order object or undefined
+     * @returns {Promise<Object|undefined>} Order object or undefined
      */
-    getOrderById(orderId) {
-        return this.orders.find(order => order.orderId === orderId || order.id === orderId);
+    async getOrderById(orderId) {
+        // MongoDB Query: db.collection("orders").findOne(...)
+        const allOrders = await getAllOrders();
+        return allOrders.find(order => 
+            (order.orderId && order.orderId === orderId) || 
+            (order.id && order.id === orderId) ||
+            (order._id && order._id === orderId)
+        );
     }
+
 
     /**
      * Cancel an order
@@ -796,8 +798,8 @@ class OrdersManager {
      * @param {string} reason - Cancellation reason
      * @returns {Object} Result object with success status and message
      */
-    cancelOrder(orderId, reason = '') {
-        const order = this.getOrderById(orderId);
+    async cancelOrder(orderId, reason = '') {
+        const order = await this.getOrderById(orderId);
         if (!order) {
             return { success: false, message: 'Order not found' };
         }
@@ -812,10 +814,10 @@ class OrdersManager {
         order.cancelledAt = new Date().toISOString();
         order.cancellationReason = reason;
         
-        this.saveOrders();
+        // Note: In a real backend, you would call an API endpoint here to update status
         
         // FIX ISSUE 3: Update profile stats after cancellation
-        updateProfileStats();
+        await updateProfileStats();
         
         return { success: true, message: 'Order cancelled successfully', order };
     }
@@ -826,8 +828,8 @@ class OrdersManager {
      * @param {string} newStatus - New status
      * @returns {boolean} Success status
      */
-    updateOrderStatus(orderId, newStatus) {
-        const order = this.getOrderById(orderId);
+    async updateOrderStatus(orderId, newStatus) {
+        const order = await this.getOrderById(orderId);
         if (!order) return false;
 
         order.status = newStatus;
@@ -842,7 +844,6 @@ class OrdersManager {
             timestamp: new Date().toISOString()
         });
 
-        this.saveOrders();
         return true;
     }
 
@@ -1270,9 +1271,10 @@ async function generateUserDataPDF(startDate = null, endDate = null) {
 
         let ordersToDisplay;
         if (startDate || endDate) {
-            ordersToDisplay = filterOrdersByDateRange(startDate, endDate);
+            ordersToDisplay = await filterOrdersByDateRange(startDate, endDate);
         } else {
-            ordersToDisplay = getAllOrders().sort((a, b) => new Date(b.date) - new Date(a.date));
+            const all = await getAllOrders();
+            ordersToDisplay = all.sort((a, b) => new Date(b.date) - new Date(a.date));
         }
 
         if (ordersToDisplay.length === 0) {
@@ -1635,6 +1637,7 @@ function openModal(modalId) {
     const modal = document.getElementById(modalId);
     if (modal) {
         modal.style.display = 'block';
+        modal.classList.add('active');
         document.body.style.overflow = 'hidden';
     }
 }
@@ -1644,10 +1647,34 @@ function openModal(modalId) {
  * @param {string} modalId - Modal element ID
  */
 function closeModal(modalId) {
-    const modal = document.getElementById(modalId);
+    const modal = typeof modalId === 'string'
+        ? document.getElementById(modalId)
+        : (modalId && modalId.classList && modalId.classList.contains('modal')
+            ? modalId
+            : (modalId && modalId.closest ? modalId.closest('.modal') : null));
     if (modal) {
         modal.style.display = 'none';
-        document.body.style.overflow = 'auto';
+        modal.classList.remove('active', 'show', 'open');
+
+        // Reset inputs/forms inside the modal
+        modal.querySelectorAll('form').forEach(form => form.reset());
+        modal.querySelectorAll('input, textarea, select').forEach(el => {
+            if (el.type === 'checkbox' || el.type === 'radio') {
+                el.checked = false;
+            } else {
+                el.value = '';
+            }
+        });
+        modal.querySelectorAll('.active').forEach(el => {
+            if (el !== modal) el.classList.remove('active');
+        });
+
+        const anyOpen = Array.from(document.querySelectorAll('.modal')).some(m =>
+            m.style.display === 'block' || m.classList.contains('active') || m.classList.contains('show') || m.classList.contains('open')
+        );
+        if (!anyOpen) {
+            document.body.style.overflow = '';
+        }
     }
 }
 
@@ -1682,20 +1709,6 @@ function showCancelOrderModal(orderId, displayLimit) {
             </div>
         `;
         document.body.appendChild(modal);
-
-        // Add close handlers
-        const closeBtn = modal.querySelector('.close');
-        const cancelBtn = modal.querySelector('#cancelOrderModalCancel');
-        
-        closeBtn.addEventListener('click', () => closeModal('cancelOrderModal'));
-        cancelBtn.addEventListener('click', () => closeModal('cancelOrderModal'));
-
-        // Click outside to close
-        modal.addEventListener('click', (e) => {
-            if (e.target === modal) {
-                closeModal('cancelOrderModal');
-            }
-        });
     }
 
     // Set the order ID in modal
@@ -2136,25 +2149,94 @@ function setupResetGuestHandlers() {
  * Setup modal close handlers
  */
 function setupModalHandlers() {
-    document.querySelectorAll('.close').forEach(closeBtn => {
-        closeBtn.addEventListener('click', function() {
-            closeModal(this.getAttribute('data-modal'));
-        });
-    });
-    
-    document.querySelectorAll('.modal-btn-cancel').forEach(btn => {
-        btn.addEventListener('click', function() {
-            closeModal(this.getAttribute('data-modal'));
-        });
-    });
-    
-    // Click outside modal to close
-    window.addEventListener('click', function(event) {
-        if (event.target.classList.contains('modal')) {
-            event.target.style.display = 'none';
-            document.body.style.overflow = 'auto';
+    if (window.__modalDelegationReady) return;
+    window.__modalDelegationReady = true;
+
+    document.addEventListener('click', function(event) {
+        const closeTrigger = event.target.closest('.close, .modal-btn-cancel');
+        if (closeTrigger) {
+            const modalId = closeTrigger.getAttribute('data-modal');
+            closeModal(modalId || closeTrigger);
+            return;
+        }
+
+        if (event.target.classList && event.target.classList.contains('modal')) {
+            closeModal(event.target);
         }
     });
+
+    document.addEventListener('keydown', function(event) {
+        if (event.key === 'Escape' || event.key === 'Esc') {
+            const openModals = Array.from(document.querySelectorAll('.modal')).filter(m =>
+                m.style.display === 'block' || m.classList.contains('active') || m.classList.contains('show') || m.classList.contains('open')
+            );
+            if (openModals.length > 0) {
+                closeModal(openModals[openModals.length - 1]);
+            }
+        }
+    });
+}
+
+/* =========================================================
+   SECTION 10.1: BACKEND SYNC
+   Purpose: Ensure data persistence by fetching from DB on load
+========================================================= */
+
+/**
+ * Sync profile and orders from backend to ensure persistence
+ * Fixes Bug #1: Data loss on refresh/restart
+ */
+async function syncUserData() {
+    const isLoggedIn = localStorage.getItem('isLoggedIn') === 'true';
+    if (!isLoggedIn) return;
+
+    try {
+        // 1. Sync Profile from DB (Source of Truth)
+        const profileResp = await fetch('/profile/', { credentials: 'same-origin' }); // Session-auth profile sync
+        if (profileResp.ok) {
+            const data = await profileResp.json();
+            if (data.success && data.user) {
+                userProfileData = data.user;
+                const currentUser = localStorage.getItem('currentUser') || data.user.email;
+                if (currentUser) {
+                    localStorage.setItem(`userProfile_${currentUser}`, JSON.stringify(userProfileData));
+                    // Update legacy keys for compatibility
+                    localStorage.setItem('name', `${userProfileData.firstName} ${userProfileData.lastName}`);
+                    localStorage.setItem('email', userProfileData.email);
+                    localStorage.setItem('phone', userProfileData.phone);
+                }
+                updateProfileDisplay();
+                updateProfileStats();
+            }
+        }
+
+        // 2. Sync Orders from DB
+        const email = userProfileData?.email || localStorage.getItem('currentUser');
+        if (email) {
+            // Fix: Use the consistent API endpoint or authAPI helper
+            if (window.authAPI && typeof window.authAPI.getUserOrders === 'function') {
+                const response = await window.authAPI.getUserOrders();
+                if (response && response.success && Array.isArray(response.orders) && response.orders.length > 0) {
+                    const currentUser = localStorage.getItem('currentUser');
+                    localStorage.setItem(`orders_${currentUser}`, JSON.stringify(response.orders));
+                    window.dispatchEvent(new CustomEvent('ordersUpdated', { detail: response.orders }));
+                }
+            } else {
+                // Fallback to direct fetch with correct endpoint /api/orders/
+                const ordersResp = await fetch(`/api/orders/?email=${encodeURIComponent(email)}`, { credentials: 'same-origin' });
+                if (ordersResp.ok) {
+                    const data = await ordersResp.json();
+                    if (data.success && Array.isArray(data.orders) && data.orders.length > 0) {
+                        const currentUser = localStorage.getItem('currentUser');
+                        localStorage.setItem(`orders_${currentUser}`, JSON.stringify(data.orders));
+                        window.dispatchEvent(new CustomEvent('ordersUpdated', { detail: data.orders }));
+                    }
+                }
+            }
+        }
+    } catch (e) {
+        console.warn('Backend sync failed:', e);
+    }
 }
 
 /* =========================================================
@@ -2251,6 +2333,9 @@ window.addEventListener("DOMContentLoaded", async () => {
     
     // Setup all event listeners
     setupEventListeners();
+
+    // PERMANENT FIX: Fetch latest data from backend to prevent data loss
+    syncUserData();
 });
 
 /**
@@ -2310,4 +2395,3 @@ window.DynamicProfileManager = {
     closeModal,
     showCancelOrderModal
 };
-

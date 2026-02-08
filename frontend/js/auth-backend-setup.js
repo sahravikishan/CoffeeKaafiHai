@@ -195,7 +195,8 @@ const OTPSchema = new mongoose.Schema({
 const OTP = mongoose.model('OTP', OTPSchema);
 
 async function storeOTP(email, otp) {
-    await OTP.create({ email, otp });
+    const newOTP = new OTP({ email, otp });
+    await newOTP.save();
 }
 
 // Validate OTP
@@ -303,12 +304,18 @@ function authenticateToken(req, res, next) {
         return res.status(401).json({ message: 'Access token required' });
     }
     
-    jwt.verify(token, JWT_SECRET, (err, user) => {
+    jwt.verify(token, JWT_SECRET, async (err, decoded) => {
         if (err) {
             return res.status(403).json({ message: 'Invalid or expired token' });
         }
-        req.user = user;
-        next();
+        try {
+            const user = await User.findById(decoded.userId).select('-password');
+            if (!user) return res.status(401).json({ message: 'User not found' });
+            req.user = user;
+            next();
+        } catch (error) {
+            return res.status(500).json({ message: 'Server error' });
+        }
     });
 }
 
@@ -359,13 +366,14 @@ router.post('/signup', async (req, res) => {
         const hashedPassword = await hashPassword(password);
         
         // Create user
-        const user = await User.create({
+        const user = new User({
             firstName,
             lastName,
             email,
             phone,
             password: hashedPassword
         });
+        await user.save();
         
         // Generate tokens
         const accessToken = generateAccessToken(user._id, user.email);
@@ -428,6 +436,37 @@ router.post('/login', async (req, res) => {
     } catch (error) {
         console.error('Login error:', error);
         res.status(500).json({ message: 'Server error during login' });
+    }
+});
+
+// GET /api/auth/profile
+router.get('/profile', authenticateToken, async (req, res) => {
+    try {
+        const user = await User.findById(req.user._id).select('-password');
+        if (!user) return res.status(404).json({ message: 'User not found' });
+        res.json({ success: true, user });
+    } catch (error) {
+        console.error('Profile fetch error:', error);
+        res.status(500).json({ message: 'Server error' });
+    }
+});
+
+// POST /api/auth/profile
+router.post('/profile', authenticateToken, async (req, res) => {
+    try {
+        const user = await User.findById(req.user._id);
+        if (!user) return res.status(404).json({ message: 'User not found' });
+        
+        const fields = ['firstName', 'lastName', 'phone', 'address', 'avatar', 'coffeePreferences'];
+        fields.forEach(field => {
+            if (req.body[field] !== undefined) user[field] = req.body[field];
+        });
+
+        await user.save();
+        res.json({ success: true, user });
+    } catch (error) {
+        console.error('Profile update error:', error);
+        res.status(500).json({ message: 'Server error' });
     }
 });
 
@@ -494,7 +533,11 @@ router.post('/reset-password', async (req, res) => {
         const hashedPassword = await hashPassword(newPassword);
         
         // Update user password
-        await User.updateOne({ email }, { password: hashedPassword });
+        const user = await User.findOne({ email });
+        if (user) {
+            user.password = hashedPassword;
+            await user.save();
+        }
         
         res.json({ message: 'Password reset successfully' });
     } catch (error) {
@@ -623,6 +666,18 @@ const userSchema = new mongoose.Schema({
     phone: {
         type: String,
         required: true
+    },
+    address: {
+        type: String,
+        default: ''
+    },
+    avatar: {
+        type: String,
+        default: ''
+    },
+    coffeePreferences: {
+        type: Object,
+        default: {}
     },
     password: {
         type: String,
@@ -929,4 +984,3 @@ console.log('10. Frontend Integration');
 console.log('');
 console.log('Refer to the code examples above for implementation details.');
 console.log('='.repeat(80));
-

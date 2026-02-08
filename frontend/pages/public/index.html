@@ -2032,10 +2032,6 @@
                     console.warn('index: failed to mirror Django user to localStorage', e);
                 }
 
-                // Give a brief moment for page to load, then redirect
-                setTimeout(function() {
-                    window.location.href = '{% url "profile" %}';
-                }, 500);
             }
             
             loadProfilePicture();

@@ -4,8 +4,8 @@
  * Handles CSRF tokens and API communication
  */
 
-// API configuration
-const API_BASE_URL = 'http://localhost:8000/api';
+// API configuration (same-origin to preserve session cookie)
+const API_BASE_URL = '/api';
 
 /**
  * Get CSRF token from cookie

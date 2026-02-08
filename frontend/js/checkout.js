@@ -504,23 +504,6 @@ class CheckoutManager {
 
             this.deliveryAddress = `${fullName}, ${phone}, ${address}, ${city}, ${pincode}${landmark ? ', Near ' + landmark : ''}`;
 
-            // Save address to profile if user is logged in
-            const isLoggedIn = localStorage.getItem('isLoggedIn') === 'true';
-            const currentUser = localStorage.getItem('currentUser');
-            if (isLoggedIn && currentUser) {
-                try {
-                    const profileKey = `userProfile_${currentUser}`;
-                    let profile = JSON.parse(localStorage.getItem(profileKey) || 'null') || {};
-                    profile.phone = phone;
-                    profile.address = address;
-                    profile.city = city;
-                    profile.pincode = pincode;
-                    profile.landmark = landmark;
-                    localStorage.setItem(profileKey, JSON.stringify(profile));
-                } catch (e) {
-                    console.error('Failed to save address to profile:', e);
-                }
-            }
         } // For in_shop, deliveryAddress is already set in toggleAddressStep
 
         this.currentStep = 2;
@@ -719,7 +702,8 @@ class CheckoutManager {
     saveOrder(order) {
         try {
             // Persist to backend for profile + loyalty stats
-            if (typeof createOrder === 'function') {
+            // Fix: Check window.authAPI.createOrder since createOrder is not global
+            if (window.authAPI && typeof window.authAPI.createOrder === 'function') {
                 const extra = {
                     status: (order.paymentStatus === 'paid') ? 'paid' : (order.status || 'pending'),
                     clientOrderId: order.orderId,
@@ -730,7 +714,7 @@ class CheckoutManager {
                     subtotal: order.subtotal || 0,
                     tax: order.tax || 0
                 };
-                createOrder(order.items || [], order.total || 0, extra)
+                window.authAPI.createOrder(order.items || [], order.total || 0, extra)
                     .then((resp) => {
                         if (resp && resp.order && resp.order.orderId) {
                             order.backendOrderId = resp.order.orderId;
@@ -738,8 +722,51 @@ class CheckoutManager {
                     })
                     .catch((e) => {
                         console.warn('saveOrder: backend persist failed', e);
+                        // Fallback: direct session-auth POST
+                        const userEmail = localStorage.getItem('userEmail') || localStorage.getItem('currentUser') || '';
+                        fetch('/api/payment/create-order/', {
+                            method: 'POST',
+                            headers: { 'Content-Type': 'application/json' },
+                            credentials: 'same-origin',
+                            body: JSON.stringify({
+                                email: userEmail,
+                                items: order.items || [],
+                                amount: order.total || 0,
+                                currency: 'INR',
+                                receipt: `order_${Date.now()}`,
+                                ...extra
+                            })
+                        }).catch((err) => {
+                            console.warn('saveOrder: fallback persist failed', err);
+                        });
                     });
+                return;
             }
+
+            // Fallback: direct session-auth POST when authAPI is unavailable
+            const userEmail = localStorage.getItem('userEmail') || localStorage.getItem('currentUser') || '';
+            fetch('/api/payment/create-order/', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                credentials: 'same-origin',
+                body: JSON.stringify({
+                    email: userEmail,
+                    items: order.items || [],
+                    amount: order.total || 0,
+                    currency: 'INR',
+                    receipt: `order_${Date.now()}`,
+                    status: (order.paymentStatus === 'paid') ? 'paid' : (order.status || 'pending'),
+                    clientOrderId: order.orderId,
+                    orderType: order.orderType || '',
+                    deliveryAddress: order.deliveryAddress || '',
+                    paymentMethod: order.paymentMethod || '',
+                    paymentStatus: order.paymentStatus || '',
+                    subtotal: order.subtotal || 0,
+                    tax: order.tax || 0
+                })
+            }).catch((e) => {
+                console.warn('saveOrder: fallback persist failed', e);
+            });
 
             if (typeof addNewOrder === 'function') {
                 addNewOrder(order, { suppressToast: true });

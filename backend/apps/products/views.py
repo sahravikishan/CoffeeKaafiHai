@@ -6,19 +6,111 @@ These views handle JSON requests from the frontend.
 from django.http import JsonResponse
 from django.views.decorators.http import require_http_methods
 from django.views.decorators.csrf import csrf_exempt
-from django.contrib.auth import get_user_model
+from django.contrib.auth import get_user_model, login as django_login
+from django.db import transaction
+from django.db.models import Sum
 from django.contrib.auth.decorators import login_required, user_passes_test
 import json
 from datetime import datetime, timedelta
 import random
-from database.models import User, OTP, Order, Payment
+from decimal import Decimal
+from database.models import User, OTP, Order as MongoOrder, Payment as MongoPayment  # fetch reads from MongoDB on each request
 from database.mongo import get_database
+from .models import Order as OrderModel, Payment as PaymentModel, UserProfile, UserActivity, Feedback
+from .forms import OrderForm
 import bcrypt
 
 
 # ==========================================
 # PRODUCT ENDPOINTS
 # ==========================================
+
+def _get_django_user_by_email(email):
+    """Fetch Django auth user by email or username for FK usage."""
+    user_model = get_user_model()
+    return (
+        user_model.objects.filter(email=email).first()
+        or user_model.objects.filter(username=email).first()
+    )
+
+
+def _get_or_create_profile(email, mongo_user=None):
+    """Ensure a persistent user profile exists for this email."""
+    if not email:
+        return None
+    profile = UserProfile.objects.filter(email=email).first()
+    if profile:
+        if not profile.user:
+            profile.user = _get_django_user_by_email(email)
+            profile.save(update_fields=['user'])
+        return profile
+
+    defaults = {
+        'first_name': (mongo_user or {}).get('firstName', ''),
+        'last_name': (mongo_user or {}).get('lastName', ''),
+        'phone': (mongo_user or {}).get('phone', ''),
+        'address': (mongo_user or {}).get('address', ''),
+        'coffee_preferences': (mongo_user or {}).get('coffeePreferences', {}) or {},
+        'avatar': (mongo_user or {}).get('avatar', ''),
+    }
+    user = _get_django_user_by_email(email)
+    profile = UserProfile.objects.create(email=email, user=user, **defaults)
+    return profile
+
+
+def _log_activity(email, action, metadata=None):
+    """Persist user activity for audit/history."""
+    if not email:
+        return
+    UserActivity.objects.create(
+        user=_get_django_user_by_email(email),
+        email=email,
+        action=action,
+        metadata=metadata or {}
+    )
+
+
+def _backfill_orders_from_mongo(email):
+    """One-time migration of legacy MongoDB orders into Django DB."""
+    if not email:
+        return
+    if OrderModel.objects.filter(email=email).exists():
+        return
+    try:
+        db = get_database()
+        legacy_orders = list(db['orders'].find({'email': email}).sort('createdAt', -1))
+        profile = UserProfile.objects.filter(email=email).first()
+        profile_name = ''
+        if profile:
+            profile_name = f"{profile.first_name} {profile.last_name}".strip()
+        for legacy in legacy_orders:
+            legacy_created = legacy.get('createdAt')
+            legacy_updated = legacy.get('updatedAt') or legacy_created
+            extra = {k: v for k, v in legacy.items() if k not in {'_id', 'email', 'items', 'totalAmount', 'status', 'createdAt', 'updatedAt'}}
+            legacy_name = extra.get('name') or extra.get('customerName') or profile_name
+            legacy_phone = extra.get('phone') or extra.get('customerPhone') or (profile.phone if profile else '')
+            legacy_address = extra.get('address') or extra.get('deliveryAddress') or (profile.address if profile else '')
+            order = OrderModel.objects.create(
+                user=_get_django_user_by_email(email),
+                email=email,
+                order_name=legacy_name or '',
+                order_email=legacy.get('email') or email,
+                order_phone=legacy_phone or '',
+                order_address=legacy_address or '',
+                customer_name=legacy_name or '',
+                customer_email=legacy.get('email') or email,
+                customer_phone=legacy_phone or '',
+                customer_address=legacy_address or '',
+                items=legacy.get('items') or [],
+                total_amount=Decimal(legacy.get('totalAmount') or legacy.get('total') or 0),
+                status=legacy.get('status') or 'pending',
+                extra_fields=extra
+            )
+            # Preserve original timestamps when available
+            if legacy_created:
+                OrderModel.objects.filter(id=order.id).update(created_at=legacy_created, updated_at=legacy_updated)
+    except Exception as e:
+        print(f"Order backfill failed for {email}: {e}")
 
 @csrf_exempt
 def product_list(request):
@@ -211,6 +303,32 @@ def login(request):
                     pass
         request.session.modified = True
         request.session.save()
+
+        # Session-auth: ensure request.user is authenticated via Django
+        try:
+            user_model = get_user_model()
+            django_user = (
+                user_model.objects.filter(email=email).first()
+                or user_model.objects.filter(username=email).first()
+            )
+            if not django_user:
+                django_user = user_model.objects.create_user(username=email, email=email, password=password)
+            django_login(request, django_user, backend='django.contrib.auth.backends.ModelBackend')
+        except Exception as e:
+            print(f"Django login sync failed for {email}: {e}")
+
+        # HARD BLOCK: Create profile ONLY from signup, not login
+        # Persistence: ensure profile exists in DB for this user
+        try:
+            _get_or_create_profile(email, user)
+        except Exception as e:
+            print(f"Profile bootstrap failed for {email}: {e}")
+
+        # Persistence: log user login activity
+        try:
+            _log_activity(email, 'login')
+        except Exception as e:
+            print(f"Activity log failed for {email}: {e}")
         
         # TODO: Generate JWT tokens
         
@@ -317,6 +435,26 @@ def signup(request):
                 'message': 'Unable to create account'
             }, status=500)
 
+        # CRITICAL: Create UserProfile ONLY at signup time (one-way: signup → profile)
+        # This is the SINGLE source of truth for initial personal data
+        # Profile can be updated ONLY from profile page or signup (never from checkout)
+        try:
+            _get_or_create_profile(email, {
+                'firstName': firstName,
+                'lastName': lastName,
+                'phone': phone
+            })
+        except Exception as e:
+            if django_user:
+                try:
+                    django_user.delete()
+                except Exception:
+                    pass
+            print(f"Error creating profile during signup for {email}: {e}")
+            return JsonResponse({
+                'message': 'Unable to create account'
+            }, status=500)
+
         # Set minimal Django session for server-side authentication
         request.session['email'] = email
         try:
@@ -325,6 +463,13 @@ def signup(request):
             request.session['user_id'] = None
         request.session.modified = True
         request.session.save()
+
+        # Session-auth: ensure request.user is authenticated via Django
+        try:
+            if django_user:
+                django_login(request, django_user, backend='django.contrib.auth.backends.ModelBackend')
+        except Exception as e:
+            print(f"Django login sync failed for {email}: {e}")
         
         # TODO: Generate JWT tokens
         
@@ -359,6 +504,12 @@ def logout(request):
     """
     try:
         # Clear Django session
+        # Persistence: log logout activity before session is cleared
+        try:
+            _log_activity(request.session.get('email'), 'logout')
+        except Exception as e:
+            print(f"Activity log failed for logout: {e}")
+
         request.session.flush()
         
         return JsonResponse({
@@ -471,42 +622,98 @@ def reset_password(request):
 
 
 @csrf_exempt
+@login_required(login_url='/login/')
 @require_http_methods(["GET", "POST"])
 def profile(request):
     """
-    Get or update user profile by email.
-    GET: ?email=user@example.com
-    POST body: { "email": "...", "firstName": "...", "lastName": "...", "phone": "...", "address": "...", ... }
+    Get or update user profile for the authenticated session user.
+    GET: session-auth only
+    POST body: { "firstName": "...", "lastName": "...", "phone": "...", "address": "...", ... }
     """
     try:
         if request.method == "GET":
-            email = request.GET.get('email')
+            # Session-auth: use authenticated Django user only
+            email = request.user.email or request.user.username
             if not email:
                 return JsonResponse({'success': False, 'message': 'Email is required'}, status=400)
 
-            user = User.find_by_email(email)
-            if not user:
+            mongo_user = User.find_by_email(email)  # fetch user from MongoDB per request
+            if not mongo_user:
                 return JsonResponse({'success': False, 'message': 'User not found'}, status=404)
 
-            # Remove sensitive fields
-            user_safe = {k: v for k, v in user.items() if k != 'password'}
-            # Convert ObjectId to string if present
+            mongo_orders = MongoOrder.get_by_email(email)  # fetch orders from MongoDB per request
+            last_order = mongo_orders[0] if mongo_orders else None  # use latest Mongo order snapshot
+            last_order_at = last_order.get('createdAt') if last_order else None  # pull persisted timestamp
+            last_order_at_value = last_order_at.isoformat() if hasattr(last_order_at, 'isoformat') else last_order_at  # normalize datetime for JSON
+            last_order_items = last_order.get('items') if last_order else []  # pull persisted items list
+            member_since = mongo_user.get('createdAt') or mongo_user.get('created_at')  # use Mongo user creation timestamp
+            member_since_value = member_since.isoformat() if hasattr(member_since, 'isoformat') else member_since  # normalize datetime for JSON
+
+            # Compute loyalty stats from MongoDB orders (read-only)
+            stats = _compute_loyalty_stats(email)  # read fresh stats from MongoDB orders
+
+            user_safe = {
+                'email': mongo_user.get('email'),
+                'firstName': mongo_user.get('firstName', ''),
+                'lastName': mongo_user.get('lastName', ''),
+                'phone': mongo_user.get('phone', ''),
+                'address': mongo_user.get('address', ''),
+                'coffeePreferences': mongo_user.get('coffeePreferences', {}) or {},
+                'avatar': mongo_user.get('avatar', ''),
+                'memberSince': member_since_value,
+                'lastOrderAt': last_order_at_value,
+                'lastOrderItems': last_order_items,
+                'totalOrders': stats['totalOrders'],
+                'totalSpent': float(stats['totalSpent']),
+                'loyaltyPoints': stats['loyaltyPoints'],
+                'memberTier': stats['memberTier']
+            }
+
+            # Include recent activity history (latest 20)
             try:
-                if '_id' in user_safe:
-                    user_safe['_id'] = str(user_safe['_id'])
+                activity_qs = UserActivity.objects.filter(email=email).order_by('-created_at')[:20]
+                user_safe['activityHistory'] = [
+                    {
+                        'action': a.action,
+                        'metadata': a.metadata,
+                        'createdAt': a.created_at.isoformat() if a.created_at else None
+                    } for a in activity_qs
+                ]
             except Exception:
-                pass
+                user_safe['activityHistory'] = []
 
             return JsonResponse({'success': True, 'user': user_safe})
 
         # POST: update profile
         data = json.loads(request.body)
-        email = data.get('email') or request.session.get('email')
+        # Session-auth: use authenticated Django user only
+        email = request.user.email or request.user.username
         if not email:
             return JsonResponse({'success': False, 'message': 'Email is required'}, status=400)
 
-        user = User.find_by_email(email)
-        if not user:
+        # HARD BLOCK: only explicit profile updates are allowed (never checkout).
+        source = data.get('source')
+        if source != 'profile':
+            return JsonResponse({'success': False, 'message': 'Profile updates are only allowed from the profile page'}, status=400)
+
+        # HARD BLOCK: prevent checkout/order payloads from writing to profile
+        # NOTE: Checkout has temporary delivery address that is NEVER synced to profile
+        checkout_keys = {
+            'items', 'subtotal', 'tax', 'paymentMethod', 'paymentStatus', 'orderType',
+            'deliveryAddress', 'clientOrderId', 'receipt', 'amount', 'currency',
+            'orderId', 'orderDate', 'cart', 'razorpay_order_id', 'razorpay_payment_id'
+        }
+        if any(k in data for k in checkout_keys):
+            # Explicitly refuse checkout -> profile writes
+            return JsonResponse({'success': False, 'message': 'Profile updates are not allowed from checkout'}, status=400)
+        
+        # CRITICAL GUARD: Checkout address is temporary, profile address is permanent
+        # If both deliveryAddress intent AND address attempt are present, it's checkout trying to update permanent address
+        if data.get('address') and request.headers.get('X-Checkout-Context'):
+            return JsonResponse({'success': False, 'message': 'Checkout address is temporary and cannot update profile'}, status=400)
+
+        mongo_user = User.find_by_email(email)
+        if not mongo_user:
             return JsonResponse({'success': False, 'message': 'User not found'}, status=404)
 
         # Whitelist fields to update
@@ -515,17 +722,83 @@ def profile(request):
             if key in data:
                 update_fields[key] = data.get(key)
 
-        if not update_fields:
+        feedback_payload = data.get('feedback') or data.get('feedbacks')
+
+        if not update_fields and not feedback_payload:
             return JsonResponse({'success': False, 'message': 'No profile fields to update'}, status=400)
 
-        User.update(email, update_fields)
-        updated = User.find_by_email(email)
-        user_safe = {k: v for k, v in updated.items() if k != 'password'}
+        # Persistence: update DB-backed profile record
+        profile = _get_or_create_profile(email, mongo_user)
+        if not profile:
+            return JsonResponse({'success': False, 'message': 'Profile not found'}, status=404)
+
+        profile_updates = {}
+        if 'firstName' in update_fields:
+            profile_updates['first_name'] = update_fields.get('firstName') or ''
+        if 'lastName' in update_fields:
+            profile_updates['last_name'] = update_fields.get('lastName') or ''
+        if 'phone' in update_fields:
+            profile_updates['phone'] = update_fields.get('phone') or ''
+        if 'address' in update_fields:
+            profile_updates['address'] = update_fields.get('address') or ''
+        if 'coffeePreferences' in update_fields:
+            profile_updates['coffee_preferences'] = update_fields.get('coffeePreferences') or {}
+        if 'avatar' in update_fields:
+            profile_updates['avatar'] = update_fields.get('avatar') or ''
+
+        if profile_updates:
+            UserProfile.objects.filter(email=email).update(**profile_updates)
+
+        # Keep Mongo user in sync for existing auth flow
         try:
-            if '_id' in user_safe:
-                user_safe['_id'] = str(user_safe['_id'])
-        except Exception:
-            pass
+            User.update(email, update_fields)
+        except Exception as e:
+            print(f"Mongo profile sync failed for {email}: {e}")
+
+        # Persistence: append feedback without overwriting existing records
+        try:
+            if feedback_payload:
+                feedback_items = feedback_payload if isinstance(feedback_payload, list) else [feedback_payload]
+                for item in feedback_items:
+                    Feedback.objects.create(
+                        user=_get_django_user_by_email(email),
+                        email=email,
+                        name=item.get('name', ''),
+                        category=item.get('category', ''),
+                        rating=Decimal(item.get('rating') or 0),
+                        message=item.get('message', '')
+                    )
+        except Exception as e:
+            print(f"Feedback persistence failed for {email}: {e}")
+
+        # Update Django auth user names if available
+        try:
+            django_user = _get_django_user_by_email(email)
+            if django_user:
+                if 'firstName' in update_fields:
+                    django_user.first_name = update_fields.get('firstName') or django_user.first_name
+                if 'lastName' in update_fields:
+                    django_user.last_name = update_fields.get('lastName') or django_user.last_name
+                django_user.save(update_fields=['first_name', 'last_name'])
+        except Exception as e:
+            print(f"Django user sync failed for {email}: {e}")
+
+        # Persistence: log profile update activity
+        try:
+            _log_activity(email, 'profile_updated', {'fields': list(update_fields.keys())})
+        except Exception as e:
+            print(f"Activity log failed for {email}: {e}")
+
+        mongo_user_refreshed = User.find_by_email(email)  # re-read profile from MongoDB after update
+        user_safe = {
+            'email': email,
+            'firstName': (mongo_user_refreshed or {}).get('firstName', ''),
+            'lastName': (mongo_user_refreshed or {}).get('lastName', ''),
+            'phone': (mongo_user_refreshed or {}).get('phone', ''),
+            'address': (mongo_user_refreshed or {}).get('address', ''),
+            'coffeePreferences': (mongo_user_refreshed or {}).get('coffeePreferences', {}) or {},
+            'avatar': (mongo_user_refreshed or {}).get('avatar', '')
+        }
 
         return JsonResponse({'success': True, 'message': 'Profile updated', 'user': user_safe})
     except json.JSONDecodeError:
@@ -542,22 +815,15 @@ def profile(request):
 def _compute_loyalty_stats(email):
     """Compute loyalty stats from orders."""
     try:
-        orders = Order.get_by_email(email)
+        db = get_database()  # read orders directly from MongoDB each time
+        active_orders = list(db['orders'].find({'email': email, 'status': {'$ne': 'cancelled'}}))  # no cached state
+        total_orders = len(active_orders)  # compute count from fresh Mongo results
+        total_spent = sum(Decimal(str(o.get('totalAmount') or o.get('total') or 0)) for o in active_orders)  # sum persisted totals
     except Exception:
-        orders = []
+        total_orders = 0
+        total_spent = 0
 
-    # Only count non-cancelled orders
-    active_orders = [o for o in orders if o.get('status') != 'cancelled']
-    total_orders = len(active_orders)
-
-    total_spent = 0
-    for o in active_orders:
-        try:
-            total_spent += float(o.get('totalAmount') or o.get('total') or 0)
-        except Exception:
-            pass
-
-    points = int(total_spent // 10)
+    points = int(Decimal(total_spent) // Decimal(10))
 
     member_tier = 'Bronze'
     if total_orders > 20:
@@ -595,6 +861,8 @@ def create_order(request):
         currency = data.get('currency', 'INR')
         receipt = data.get('receipt')
         email = data.get('email')
+        # Use session email as the profile source of truth (checkout must not override profile owner)
+        profile_email = request.session.get('email') or email
         items = data.get('items', [])
         status = data.get('status') or 'pending'
 
@@ -615,26 +883,133 @@ def create_order(request):
             'tax': data.get('tax')
         }
 
-        # Create order in MongoDB
-        order_id = Order.create(email, items, amount, status=status, extra_fields=extra_fields)
+        # NOTE: Checkout must NEVER mutate request.user or request.user.profile.
+        # All profile data here is read-only, used only to snapshot order fields.
+        django_user = _get_django_user_by_email(profile_email)
+        with transaction.atomic():
+            # One-way sync: profile -> checkout (checkout must never update profile)
+            # Lock the profile row to detect any accidental writes within this checkout transaction.
+            profile = UserProfile.objects.select_for_update().filter(email=profile_email).first()
+            profile_name = ''
+            if profile:
+                profile_name = f"{profile.first_name} {profile.last_name}".strip()
+
+            # Checkout fields can override order snapshot only (not profile)
+            checkout_name = data.get('name')
+            if not checkout_name:
+                first = data.get('firstName') or ''
+                last = data.get('lastName') or ''
+                checkout_name = f"{first} {last}".strip()
+            snapshot_name = checkout_name or profile_name or ''
+            snapshot_email = data.get('email') or (profile.email if profile else profile_email) or ''
+            snapshot_phone = data.get('phone') or (profile.phone if profile else '')
+            
+            # CRITICAL: Checkout address is TEMPORARY and INDEPENDENT of profile address
+            # User can enter any delivery address during checkout without affecting profile
+            # This is the one-way flow: profile -> checkout (read-only), NEVER checkout -> profile
+            # Checkout-provided 'address' or 'deliveryAddress' only writes to order_address, never profile.address
+            checkout_address = data.get('address') or data.get('deliveryAddress')
+            snapshot_address = checkout_address or (profile.address if profile else '')
+
+            # FAIL-SAFE GUARD: snapshot profile values BEFORE checkout write
+            # This includes address so we can verify it was never modified by checkout
+            profile_before = None
+            if profile:
+                profile_before = {
+                    'first_name': profile.first_name,
+                    'last_name': profile.last_name,
+                    'email': profile.email,
+                    'phone': profile.phone,
+                    'address': profile.address,  # Profile address is immutable from checkout
+                }
+
+            # Checkout MUST use OrderForm only (no User/Profile forms)
+            form_data = {
+                'items': json.dumps(items or []),
+                'total_amount': str(amount),
+                'status': status,
+                'extra_fields': json.dumps(extra_fields),
+                'order_name': snapshot_name,
+                'order_email': snapshot_email,
+                'order_phone': snapshot_phone,
+                'order_address': snapshot_address,
+            }
+
+            order_form = OrderForm(form_data)
+            if not order_form.is_valid():
+                return JsonResponse({'success': False, 'message': 'Invalid order data', 'errors': order_form.errors}, status=400)
+
+            # HARD BLOCK: Save order ONLY, NEVER profile/user
+            # Checkout data is SNAPSHOT-ONLY for this order (order_name, order_email, order_phone, order_address)
+            # These fields are SEPARATE and INDEPENDENT from UserProfile (first_name, last_name, email, phone, address)
+            # CRITICAL: order_address is temporary delivery address - it is NEVER synced back to profile.address
+            # Profile address can ONLY be modified by user manually on profile page (source='profile')
+            # Even if user changes address during checkout, profile.address remains unchanged
+            order = order_form.save(commit=False)
+            order.user = django_user
+            order.email = profile_email
+            # Legacy fields populated for backward compatibility only
+            order.customer_name = snapshot_name
+            order.customer_email = snapshot_email
+            order.customer_phone = snapshot_phone
+            order.customer_address = snapshot_address
+            order.save()
+
+            # FAIL-LOUD GUARD: Verify profile data was NOT modified during checkout
+            # CRITICAL: profile.address must remain unchanged (user delivery address is temporary, in order_address only)
+            # If this assertion fails, checkout view has a critical bug allowing address sync back to profile
+            if profile_before is not None:
+                profile_after = UserProfile.objects.filter(email=profile_email).first()
+                if profile_after and {
+                    'first_name': profile_after.first_name,
+                    'last_name': profile_after.last_name,
+                    'email': profile_after.email,
+                    'phone': profile_after.phone,
+                    'address': profile_after.address,  # THIS MUST NEVER CHANGE FROM CHECKOUT
+                } != profile_before:
+                    raise Exception('Checkout attempted to modify profile data (blocked). Profile address must remain immutable from checkout.')
 
         # TODO: Create order in Razorpay using razorpay SDK
         razorpay_order_id = f'order_{datetime.now().timestamp()}'.replace('.', '_')
 
-        # Create payment record in MongoDB
-        Payment.create(str(order_id), email, amount, razorpay_order_id, status='pending')
+        # Persistence: create payment record in DB
+        PaymentModel.objects.create(
+            user=django_user,
+            order=order,
+            email=profile_email,
+            amount=Decimal(amount),
+            razorpay_order_id=razorpay_order_id,
+            status='pending'
+        )
 
-        # Update user profile summary fields (stats + last order)
+        # NOTE: No profile/user writes are allowed in checkout flow.
+        stats = None
+
+        # Persistence: update profile with order stats (CRITICAL FIX for data loss)
+        # When an order is created, profile must be updated with latest statistics
+        # so data persists across page refreshes and browser restarts
         try:
-            stats = _compute_loyalty_stats(email)
-            User.update(email, {
-                **stats,
-                'lastOrderItems': items,
-                'lastOrderAt': datetime.now().isoformat()
-            })
+            profile_to_update = UserProfile.objects.filter(email=profile_email).first()
+            if profile_to_update:
+                # Compute updated stats including this new order
+                stats = _compute_loyalty_stats(profile_email)
+                # CRITICAL: Save stats to database (not just computed in memory)
+                UserProfile.objects.filter(email=profile_email).update(
+                    last_order_at=datetime.now(),
+                    last_order_items=items or [],
+                    total_orders=stats['totalOrders'],
+                    total_spent=Decimal(str(stats['totalSpent'])),
+                    loyalty_points=stats['loyaltyPoints'],
+                    member_tier=stats['memberTier']
+                )
         except Exception as e:
-            print(f"Profile stats update failed for {email}: {e}")
-            stats = None
+            print(f"Profile stats update failed for {profile_email}: {e}")
+
+        # Persistence: log order creation activity
+        try:
+            _log_activity(profile_email, 'order_created', {'orderId': str(order.id), 'status': status})
+        except Exception as e:
+            print(f"Activity log failed for {profile_email}: {e}")
 
         return JsonResponse({
             'success': True,
@@ -642,9 +1017,9 @@ def create_order(request):
             'amount': amount,
             'currency': currency,
             'order': {
-                'orderId': str(order_id),
+                'orderId': str(order.id),
                 'clientOrderId': extra_fields.get('clientOrderId'),
-                'email': email,
+                'email': profile_email,
                 'items': items,
                 'totalAmount': amount,
                 'status': status
@@ -692,24 +1067,40 @@ def verify_payment(request):
         # TODO: Verify signature using Razorpay SDK
         # For now, assume signature is valid
         
-        # Find payment in MongoDB by Razorpay order ID
-        payment = Payment.get_by_razorpay_order_id(order_id)
+        # Persistence: verify and update payment/order in DB (NEVER profile)
+        payment = PaymentModel.objects.filter(razorpay_order_id=order_id).first()
         if payment:
-            # Update payment status to verified in MongoDB
-            Payment.update_status(payment['_id'], 'verified', payment_id, signature)
+            payment.status = 'verified'
+            payment.razorpay_payment_id = payment_id or payment.razorpay_payment_id
+            payment.razorpay_signature = signature or payment.razorpay_signature
+            payment.save(update_fields=['status', 'razorpay_payment_id', 'razorpay_signature', 'updated_at'])
 
-            # Update order status
-            order_id_str = payment.get('orderId')
-            if order_id_str:
-                Order.update_status(order_id_str, 'paid')
+            if payment.order_id:
+                OrderModel.objects.filter(id=payment.order_id).update(status='paid', updated_at=datetime.now())
 
-            # Refresh user loyalty stats after successful payment
+            # HARD BLOCK: Payment verification updates ONLY payment/order records, NEVER profile
+            # Profile data is immutable from payment/checkout flows (one-way: profile → checkout only)
+
+            # Persistence: update profile with latest stats when payment is verified (CRITICAL FIX)
+            # When order status changes to 'paid', ensure profile reflects the updated statistics
             try:
                 if email:
                     stats = _compute_loyalty_stats(email)
-                    User.update(email, stats)
+                    # CRITICAL: Save updated stats to database so data persists across refreshes
+                    UserProfile.objects.filter(email=email).update(
+                        total_orders=stats['totalOrders'],
+                        total_spent=Decimal(str(stats['totalSpent'])),
+                        loyalty_points=stats['loyaltyPoints'],
+                        member_tier=stats['memberTier']
+                    )
             except Exception as e:
-                print(f"Profile stats refresh failed for {email}: {e}")
+                print(f"Profile stats update failed for {email}: {e}")
+
+            # Persistence: log payment verification activity
+            try:
+                _log_activity(email, 'payment_verified', {'razorpayOrderId': order_id})
+            except Exception as e:
+                print(f"Activity log failed for {email}: {e}")
         
         return JsonResponse({
             'verified': True,
@@ -755,12 +1146,42 @@ def process_payment(request):
         
         # TODO: Process payment based on method
         
-        # Create payment record in MongoDB
-        payment_id = Payment.create(order_id, email, amount, '', status='processing')
+        # HARD BLOCK: Create payment/order records ONLY, NEVER profile
+        # Persistence: create payment record in DB (NEVER profile)
+        django_user = _get_django_user_by_email(email)
+        order_obj = OrderModel.objects.filter(id=order_id).first() if order_id else None
+        PaymentModel.objects.create(
+            user=django_user,
+            order=order_obj,
+            email=email,
+            amount=Decimal(amount),
+            razorpay_order_id='',
+            status='processing'
+        )
         
-        # Update order status
-        if order_id:
-            Order.update_status(order_id, 'processing')
+        # Update order status (NEVER profile)
+        if order_obj:
+            OrderModel.objects.filter(id=order_obj.id).update(status='processing', updated_at=datetime.now())
+
+        # Persistence: update profile with latest stats after payment processing (CRITICAL FIX)
+        # When payment is processed, ensure profile reflects updated order statistics
+        try:
+            stats = _compute_loyalty_stats(email)
+            # CRITICAL: Save updated stats to database so data persists across refreshes
+            UserProfile.objects.filter(email=email).update(
+                total_orders=stats['totalOrders'],
+                total_spent=Decimal(str(stats['totalSpent'])),
+                loyalty_points=stats['loyaltyPoints'],
+                member_tier=stats['memberTier']
+            )
+        except Exception as e:
+            print(f"Profile stats update failed for {email}: {e}")
+
+        # Persistence: log payment processing activity
+        try:
+            _log_activity(email, 'payment_processing', {'orderId': order_id})
+        except Exception as e:
+            print(f"Activity log failed for {email}: {e}")
         
         return JsonResponse({
             'success': True,
@@ -785,39 +1206,63 @@ def process_payment(request):
 # ==========================================
 
 @csrf_exempt
+@login_required(login_url='/login/')
 @require_http_methods(["GET"])
 def get_orders(request):
     """
     Get orders for a user.
-    Expected query params: ?email=user@example.com
+    Session-auth only.
     """
     try:
-        email = request.GET.get('email')
+        email = request.user.email or request.user.username
         
         if not email:
             return JsonResponse({
                 'success': False,
                 'message': 'Email is required'
             }, status=400)
+
+        # Persistence: migrate legacy orders if needed
+        _backfill_orders_from_mongo(email)
+
+        # Persistence: fetch orders from Django DB (source of truth for checkout)
+        orders = OrderModel.objects.filter(email=email).order_by('-created_at')
         
-        # Fetch orders from MongoDB
-        orders = Order.get_by_email(email)
-        
-        # Convert ObjectId to string and normalize fields for frontend
+        # Normalize fields for frontend
         orders_data = []
         for order in orders:
-            order['_id'] = str(order['_id'])
-            order['orderId'] = order.get('orderId') or order.get('clientOrderId') or order.get('_id')
-            if 'total' not in order:
-                order['total'] = order.get('totalAmount')
-            if 'date' not in order:
-                order['date'] = order.get('orderDate') or order.get('createdAt')
-            if 'dateDisplay' not in order and order.get('createdAt'):
-                try:
-                    order['dateDisplay'] = order.get('createdAt').isoformat() if hasattr(order.get('createdAt'), 'isoformat') else str(order.get('createdAt'))
-                except Exception:
-                    order['dateDisplay'] = str(order.get('createdAt'))
-            orders_data.append(order)
+            extra = order.extra_fields or {}
+            created_at_value = order.created_at.isoformat() if order.created_at else None
+            updated_at_value = order.updated_at.isoformat() if order.updated_at else None
+            total_amount = float(Decimal(str(order.total_amount or 0)))
+            order_dict = {
+                '_id': str(order.id) if order.id is not None else None,
+                'orderId': str(order.id) if order.id is not None else None,
+                'clientOrderId': extra.get('clientOrderId'),
+                'email': order.email,
+                'orderName': order.order_name or extra.get('orderName') or '',
+                'orderEmail': order.order_email or extra.get('orderEmail') or '',
+                'orderPhone': order.order_phone or extra.get('orderPhone') or '',
+                'orderAddress': order.order_address or extra.get('orderAddress') or '',
+                # Legacy snapshot fields for backward compatibility
+                'customerName': order.customer_name or extra.get('customerName') or '',
+                'customerEmail': order.customer_email or extra.get('customerEmail') or '',
+                'customerPhone': order.customer_phone or extra.get('customerPhone') or '',
+                'customerAddress': order.customer_address or extra.get('customerAddress') or '',
+                'items': order.items or [],
+                'totalAmount': total_amount,
+                'status': order.status or extra.get('status') or 'pending',
+                'createdAt': created_at_value,
+                'updatedAt': updated_at_value,
+                **extra
+            }
+            if 'total' not in order_dict:
+                order_dict['total'] = order_dict.get('totalAmount')
+            if 'date' not in order_dict:
+                order_dict['date'] = order_dict.get('orderDate') or order_dict.get('createdAt')
+            if 'dateDisplay' not in order_dict and order_dict.get('createdAt'):
+                order_dict['dateDisplay'] = order_dict.get('createdAt')
+            orders_data.append(order_dict)
         
         return JsonResponse({
             'success': True,
@@ -848,14 +1293,28 @@ def get_payments(request):
                 'message': 'Email is required'
             }, status=400)
         
-        # Fetch payments from MongoDB
-        payments = Payment.get_by_email(email)
+        # Persistence: fetch payments from MongoDB
+        payments = MongoPayment.get_by_email(email)  # read from MongoDB on every request
         
-        # Convert ObjectId to string for JSON serialization
+        # Convert to JSON-serializable structure
         payments_data = []
         for payment in payments:
-            payment['_id'] = str(payment['_id'])
-            payments_data.append(payment)
+            created_at = payment.get('createdAt')  # use Mongo created timestamp
+            updated_at = payment.get('updatedAt')  # use Mongo updated timestamp
+            created_at_value = created_at.isoformat() if hasattr(created_at, 'isoformat') else created_at  # normalize datetime for JSON
+            updated_at_value = updated_at.isoformat() if hasattr(updated_at, 'isoformat') else updated_at  # normalize datetime for JSON
+            payments_data.append({
+                '_id': str(payment.get('_id')) if payment.get('_id') is not None else None,
+                'orderId': str(payment.get('orderId')) if payment.get('orderId') is not None else None,
+                'email': payment.get('email'),
+                'amount': float(Decimal(str(payment.get('amount') or 0))),
+                'razorpayOrderId': payment.get('razorpayOrderId') or '',
+                'razorpayPaymentId': payment.get('razorpayPaymentId') or '',
+                'razorpaySignature': payment.get('razorpaySignature') or '',
+                'status': payment.get('status') or 'pending',
+                'createdAt': created_at_value,
+                'updatedAt': updated_at_value,
+            })
         
         return JsonResponse({
             'success': True,

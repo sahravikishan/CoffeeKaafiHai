@@ -5,7 +5,8 @@ These views handle rendering frontend templates without adding business logic.
 
 from django.shortcuts import render, redirect
 from django.http import JsonResponse
-from database.models import User, Order, Payment
+from database.models import User
+from .models import Order
 from django.views.decorators.csrf import ensure_csrf_cookie
 from django.contrib.auth.decorators import login_required, user_passes_test
 
@@ -42,8 +43,8 @@ def index(request):
                     'phone': user.get('phone', ''),
                 }
                 # Fetch user's recent orders (limit to 5)
-                orders = Order.get_by_email(user_email)
-                context['user_orders'] = orders[:5] if orders else []
+                orders = Order.objects.filter(email=user_email).order_by('-created_at')
+                context['user_orders'] = list(orders[:5]) if orders else []
     except Exception as e:
         # Handle MongoDB connection or query failures gracefully
         print(f"Error fetching user data for home page: {e}")
@@ -92,12 +93,20 @@ def reset_password(request):
     return render(request, 'pages/customer/reset-password.html')
 
 
+@login_required(login_url='/login/')
 @ensure_csrf_cookie
 def customer_profile(request):
     """
     Render customer profile page with user data.
     Redirects to login if user is not authenticated via session.
     """
+    accept_header = request.headers.get('Accept', '')
+    wants_json = 'text/html' not in accept_header
+    if wants_json:
+        from . import views as api_views
+        # Session-auth: return JSON profile data for fetch("/profile/")
+        return api_views.profile(request)
+
     context = {
         'is_authenticated': False,
         'user': None,
@@ -105,8 +114,8 @@ def customer_profile(request):
     }
     
     try:
-        # Require authenticated session - redirect to login if not authenticated
-        email = request.session.get('email')
+        # Session-auth: require authenticated Django user
+        email = request.user.email or request.user.username
         # --- FIX: Comment out the redirect to let JS handle it ---
         # if not email:
         #     return redirect('login')
@@ -123,8 +132,8 @@ def customer_profile(request):
             }
 
             # Fetch user orders from MongoDB
-            orders = Order.get_by_email(email)
-            context['orders'] = orders if orders else []
+            orders = Order.objects.filter(email=email).order_by('-created_at')
+            context['orders'] = list(orders) if orders else []
     except Exception as e:
         print(f"Error fetching profile data: {e}")
         # --- FIX: No redirect here; let JS handle ---
@@ -145,8 +154,8 @@ def order_tracking(request):
         #     return redirect('login')
 
         # Fetch user orders from MongoDB (even if no email, context empty and JS will redirect)
-        orders = Order.get_by_email(email) if email else []
-        context['orders'] = orders
+        orders = Order.objects.filter(email=email).order_by('-created_at') if email else []
+        context['orders'] = list(orders) if orders else []
         context['email'] = email
     except Exception as e:
         print(f"Error fetching orders: {e}")
@@ -187,17 +196,15 @@ def admin_dashboard(request):
     """Render admin dashboard page with admin data"""
     context = {}
     try:
-        from database.mongo import get_database
-        db = get_database()
-
-        # Fetch dashboard statistics
-        total_orders = db['orders'].count_documents({})
-        pending_orders = db['orders'].count_documents({'status': 'pending'})
-        completed_orders = db['orders'].count_documents({'status': 'paid'})
-        total_users = db['users'].count_documents({})
+        from django.contrib.auth import get_user_model
+        # Fetch dashboard statistics from DB-backed orders
+        total_orders = Order.objects.count()
+        pending_orders = Order.objects.filter(status='pending').count()
+        completed_orders = Order.objects.filter(status='paid').count()
+        total_users = get_user_model().objects.count()
 
         # Fetch recent orders
-        recent_orders = list(db['orders'].find({}).sort('createdAt', -1).limit(10))
+        recent_orders = list(Order.objects.order_by('-created_at')[:10])
 
         context = {
             'total_orders': total_orders,
