@@ -1207,13 +1207,60 @@ def process_payment(request):
 
 @csrf_exempt
 @login_required(login_url='/login/')
-@require_http_methods(["GET"])
+@require_http_methods(["GET", "POST"])
 def get_orders(request):
     """
     Get orders for a user.
     Session-auth only.
     """
     try:
+        if request.method == "POST":
+            data = json.loads(request.body or '{}')
+            email = request.user.email or request.user.username
+            order_id = data.get('orderId') or data.get('id')
+            client_order_id = data.get('clientOrderId')
+            reason = data.get('reason', '').strip()
+
+            if not email:
+                return JsonResponse({'success': False, 'message': 'Email is required'}, status=400)
+
+            # Resolve order by ID or clientOrderId
+            order = None
+            if order_id:
+                order = OrderModel.objects.filter(email=email, id=order_id).first()
+            if not order and client_order_id:
+                for candidate in OrderModel.objects.filter(email=email).order_by('-created_at')[:200]:
+                    extra = candidate.extra_fields or {}
+                    if extra.get('clientOrderId') == client_order_id:
+                        order = candidate
+                        break
+
+            if not order:
+                return JsonResponse({'success': False, 'message': 'Order not found'}, status=404)
+
+            if order.status in ('delivered', 'cancelled'):
+                return JsonResponse({'success': False, 'message': f'Cannot cancel {order.status} order'}, status=400)
+
+            # Persist cancellation
+            order.status = 'cancelled'
+            extra_fields = order.extra_fields or {}
+            extra_fields['cancellationReason'] = reason
+            extra_fields['cancelledAt'] = datetime.now().isoformat()
+            order.extra_fields = extra_fields
+            order.save(update_fields=['status', 'extra_fields', 'updated_at'])
+
+            return JsonResponse({
+                'success': True,
+                'message': 'Order cancelled successfully',
+                'order': {
+                    'orderId': str(order.id),
+                    'clientOrderId': extra_fields.get('clientOrderId'),
+                    'status': order.status,
+                    'cancellationReason': reason,
+                    'cancelledAt': extra_fields.get('cancelledAt')
+                }
+            })
+
         email = request.user.email or request.user.username
         
         if not email:

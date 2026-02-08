@@ -996,7 +996,7 @@
         }
 
         // Confirm cancellation
-        function confirmCancellation() {
+        async function confirmCancellation() {
             const reason = document.getElementById('cancelReason').value.trim();
 
             if (!reason) {
@@ -1008,9 +1008,9 @@
                 return;
             }
 
-            const result = ordersManager.cancelOrder(currentOrderId, reason);
+            const result = await ordersManager.cancelOrder(currentOrderId, reason);
 
-            if (result.success) {
+            if (result && result.success) {
                 closeCancelModal();
                 if (updateInterval) {
                     clearInterval(updateInterval);

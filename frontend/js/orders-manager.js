@@ -422,7 +422,7 @@ async function getAllOrders() {
         if (!userId) return [];
         
         // MongoDB Query: db.collection("orders").find({ email: userId })
-        const response = await fetch(`/api/orders/?email=${encodeURIComponent(userId)}`, { credentials: 'same-origin' });
+        const response = await fetch('/api/orders/', { credentials: 'same-origin' });
         if (response.ok) {
             const data = await response.json();
             return data.orders || [];
@@ -809,12 +809,34 @@ class OrdersManager {
             return { success: false, message: `Cannot cancel ${order.status} order` };
         }
 
-        // Update order status
+        // Persist cancellation to backend
+        try {
+            const payload = {
+                orderId: order.orderId || order.id,
+                clientOrderId: order.clientOrderId || null,
+                reason: reason || ''
+            };
+            const resp = await fetch('/api/orders/', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                credentials: 'same-origin',
+                body: JSON.stringify(payload)
+            });
+            if (!resp.ok) {
+                return { success: false, message: `Cancel failed (HTTP ${resp.status})` };
+            }
+            const data = await resp.json();
+            if (!data || !data.success) {
+                return { success: false, message: data && data.message ? data.message : 'Cancel failed' };
+            }
+        } catch (e) {
+            return { success: false, message: 'Cancel failed' };
+        }
+
+        // Update local view state
         order.status = 'cancelled';
         order.cancelledAt = new Date().toISOString();
         order.cancellationReason = reason;
-        
-        // Note: In a real backend, you would call an API endpoint here to update status
         
         // FIX ISSUE 3: Update profile stats after cancellation
         await updateProfileStats();
@@ -1272,9 +1294,10 @@ async function generateUserDataPDF(startDate = null, endDate = null) {
         let ordersToDisplay;
         if (startDate || endDate) {
             ordersToDisplay = await filterOrdersByDateRange(startDate, endDate);
+            ordersToDisplay = ordersToDisplay.sort((a, b) => new Date(a.date) - new Date(b.date));
         } else {
             const all = await getAllOrders();
-            ordersToDisplay = all.sort((a, b) => new Date(b.date) - new Date(a.date));
+            ordersToDisplay = all.sort((a, b) => new Date(a.date) - new Date(b.date));
         }
 
         if (ordersToDisplay.length === 0) {
@@ -1445,10 +1468,20 @@ async function addLogo(doc, pageWidth) {
                         const logoSize = 35;
                         const logoX = (pageWidth - logoSize) / 2;
                         const canvas = document.createElement('canvas');
-                        canvas.width = img.width;
-                        canvas.height = img.height;
+                        const size = 200;
+                        canvas.width = size;
+                        canvas.height = size;
                         const ctx = canvas.getContext('2d');
-                        ctx.drawImage(img, 0, 0);
+                        const minSide = Math.min(img.width, img.height);
+                        const sx = (img.width - minSide) / 2;
+                        const sy = (img.height - minSide) / 2;
+                        ctx.save();
+                        ctx.beginPath();
+                        ctx.arc(size / 2, size / 2, size / 2, 0, Math.PI * 2);
+                        ctx.closePath();
+                        ctx.clip();
+                        ctx.drawImage(img, sx, sy, minSide, minSide, 0, 0, size, size);
+                        ctx.restore();
                         const pngData = canvas.toDataURL('image/png');
                         doc.addImage(pngData, 'PNG', logoX, 20, logoSize, logoSize);
                         resolve();
@@ -1722,10 +1755,10 @@ function showCancelOrderModal(orderId, displayLimit) {
     confirmBtn.parentNode.replaceChild(newConfirmBtn, confirmBtn);
     
     // Add new click handler
-    newConfirmBtn.addEventListener('click', function() {
+    newConfirmBtn.addEventListener('click', async function() {
         try {
             if (window.ordersManager && typeof window.ordersManager.cancelOrder === 'function') {
-                const res = window.ordersManager.cancelOrder(orderId, 'Cancelled by user from Profile');
+                const res = await window.ordersManager.cancelOrder(orderId, 'Cancelled by user from Profile');
                 if (res && res.success) {
                     closeModal('cancelOrderModal');
                     showToast('Order cancelled successfully', 'success');
@@ -2223,7 +2256,7 @@ async function syncUserData() {
                 }
             } else {
                 // Fallback to direct fetch with correct endpoint /api/orders/
-                const ordersResp = await fetch(`/api/orders/?email=${encodeURIComponent(email)}`, { credentials: 'same-origin' });
+                const ordersResp = await fetch('/api/orders/', { credentials: 'same-origin' });
                 if (ordersResp.ok) {
                     const data = await ordersResp.json();
                     if (data.success && Array.isArray(data.orders) && data.orders.length > 0) {
