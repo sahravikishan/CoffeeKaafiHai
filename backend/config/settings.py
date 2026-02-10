@@ -11,6 +11,7 @@ https://docs.djangoproject.com/en/6.0/ref/settings/
 """
 
 from pathlib import Path
+import os
 
 # Build paths inside the project like this: BASE_DIR / 'subdir'.
 BASE_DIR = Path(__file__).resolve().parent.parent
@@ -117,12 +118,33 @@ USE_I18N = True
 USE_TZ = True
 
 
+def _load_dotenv():
+    """Minimal .env loader for local development (KEY=VALUE per line)."""
+    env_path = BASE_DIR / '.env'
+    if not env_path.exists():
+        return
+    try:
+        for raw_line in env_path.read_text(encoding='utf-8').splitlines():
+            line = raw_line.strip()
+            if not line or line.startswith('#') or '=' not in line:
+                continue
+            key, value = line.split('=', 1)
+            key = key.strip()
+            value = value.strip().strip('"').strip("'")
+            if key and key not in os.environ:
+                os.environ[key] = value
+    except Exception:
+        # If .env fails, fall back to OS env vars only.
+        pass
+
+
+_load_dotenv()
+
 # Static files (CSS, JavaScript, Images)
 # https://docs.djangoproject.com/en/6.0/howto/static-files/
 
 STATIC_URL = '/static/'
 # Serve frontend static files during development
-import os
 STATICFILES_DIRS = [
     str(BASE_DIR.parent / 'frontend'),
 ]
@@ -151,3 +173,24 @@ REST_FRAMEWORK = {
         'rest_framework.renderers.JSONRenderer',
     ]
 }
+
+# ==========================================
+# EMAIL (GMAIL SMTP) CONFIGURATION
+# ==========================================
+EMAIL_BACKEND = 'django.core.mail.backends.smtp.EmailBackend'
+EMAIL_HOST = 'smtp.gmail.com'
+EMAIL_PORT = 587
+EMAIL_USE_TLS = True
+EMAIL_HOST_USER = os.environ.get('GMAIL_SMTP_USER', '')
+EMAIL_HOST_PASSWORD = os.environ.get('GMAIL_SMTP_APP_PASSWORD', '')
+DEFAULT_FROM_EMAIL = os.environ.get('DEFAULT_FROM_EMAIL', '') or EMAIL_HOST_USER
+EMAIL_FROM_NAME = os.environ.get('EMAIL_FROM_NAME', 'CoffeeKaafiHai')
+EMAIL_LOGO_URL = os.environ.get('EMAIL_LOGO_URL', '')
+EMAIL_LOGO_PATH = os.environ.get(
+    'EMAIL_LOGO_PATH',
+    str(BASE_DIR.parent / 'frontend' / 'images' / 'logo.png')
+)
+
+# Password reset OTP settings
+PASSWORD_RESET_OTP_EXPIRY_MINUTES = 5
+PASSWORD_RESET_OTP_MAX_ATTEMPTS = 5

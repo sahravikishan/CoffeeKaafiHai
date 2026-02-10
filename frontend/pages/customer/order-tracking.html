@@ -824,18 +824,25 @@
             }
         }
 
+        function formatTrackingDate(value) {
+            const d = value ? new Date(value) : null;
+            if (!d || isNaN(d.getTime())) return 'N/A';
+            return d.toLocaleString('en-IN', { dateStyle: 'medium', timeStyle: 'short' });
+        }
+
+        function getOrderDateValue(order) {
+            return order.orderDate || order.date || order.dateDisplay || '';
+        }
+
         // Render order card with map
         function renderOrderCard(order, focusOrderId = null) {
             const statusColor = ordersManager.getStatusColor(order.status);
             const statusText = ordersManager.getStatusText(order.status);
             const canCancel = order.status !== 'delivered' && order.status !== 'cancelled';
             const showMap = order.status !== 'delivered' && order.status !== 'cancelled';
-            const orderDate = new Date(order.orderDate).toLocaleString('en-IN', {
-                dateStyle: 'medium',
-                timeStyle: 'short'
-            });
+            const orderDate = formatTrackingDate(getOrderDateValue(order));
 
-            const isHighlighted = focusOrderId && (order.orderId === focusOrderId || order.id === focusOrderId);
+            const isHighlighted = focusOrderId && (order.orderId === focusOrderId);
             const highlightClass = isHighlighted ? 'highlighted' : '';
 
             return `
@@ -927,7 +934,7 @@
                                 <div class="timeline-dot ${isLatest ? 'active' : ''}"></div>
                                 <div class="timeline-content">
                                     <h5>${ordersManager.getStatusText(entry.status)}</h5>
-                                    <p class="timeline-time">${new Date(entry.timestamp || entry.time || order.orderDate).toLocaleString('en-IN', { dateStyle: 'medium', timeStyle: 'short' })}</p>
+                                    <p class="timeline-time">${formatTrackingDate(entry.timestamp || entry.time || getOrderDateValue(order))}</p>
                                     ${isLatest ? '<p style="color: #D2691E; font-weight: 600; margin-top: 4px;">● Current Status</p>' : ''}
                                 </div>
                             </div>
@@ -945,7 +952,7 @@
                         <div class="timeline-dot active"></div>
                         <div class="timeline-content">
                             <h5>Order Cancelled</h5>
-                            <p class="timeline-time">${new Date(order.cancelledAt || order.lastUpdated || order.orderDate).toLocaleString('en-IN', { dateStyle: 'medium', timeStyle: 'short' })}</p>
+                            <p class="timeline-time">${formatTrackingDate(order.cancelledAt || order.lastUpdated || getOrderDateValue(order))}</p>
                             ${order.cancellationReason ? `<p style="margin-top: 5px;"><strong>Reason:</strong> ${order.cancellationReason}</p>` : ''}
                         </div>
                     </div>
@@ -961,7 +968,7 @@
                         <div class="timeline-dot ${isActive ? 'active' : ''}"></div>
                         <div class="timeline-content">
                             <h5>${statusText}</h5>
-                            ${isActive ? `<p class="timeline-time">${new Date(order.orderDate).toLocaleString('en-IN', { dateStyle: 'medium', timeStyle: 'short' })}</p>` : '<p>Pending</p>'}
+                            ${isActive ? `<p class="timeline-time">${formatTrackingDate(getOrderDateValue(order))}</p>` : '<p>Pending</p>'}
                             ${isCurrent ? '<p style="color: #D2691E; font-weight: 600; margin-top: 4px;">● Current Status</p>' : ''}
                         </div>
                     </div>

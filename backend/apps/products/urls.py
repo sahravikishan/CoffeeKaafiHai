@@ -3,7 +3,7 @@ URL routing for products and API endpoints (authentication, payments, OTP).
 """
 
 from django.urls import path
-from . import views
+from . import views, password_reset_views
 
 urlpatterns = [
     # Product Endpoints
@@ -20,6 +20,10 @@ urlpatterns = [
     path('auth/profile/', views.profile, name='api_profile'),
     path('auth/forgot-password/', views.forgot_password, name='api_forgot_password'),
     path('auth/reset-password/', views.reset_password, name='api_reset_password'),
+    # Django User password reset (email OTP)
+    path('auth/password/forgot/', password_reset_views.forgot_password, name='api_password_forgot'),
+    path('auth/password/verify-otp/', password_reset_views.verify_otp, name='api_password_verify_otp'),
+    path('auth/password/reset/', password_reset_views.reset_password, name='api_password_reset'),
     
     # Admin Mongo User Management
     path('admin/mongo-users/', views.admin_mongo_users, name='admin_mongo_users'),

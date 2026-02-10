@@ -1321,7 +1321,7 @@
 
                 return `
                     <tr onclick="highlightRow(this)">
-                        <td data-label="Order ID">${order.orderId || order.id}</td>
+                        <td data-label="Order ID">${order.orderId}</td>
                         <td data-label="Customer">${customerName}</td>
                         <td data-label="Items">${itemsCount} items</td>
                         <td data-label="Total">₹${order.total}</td>
@@ -1330,10 +1330,10 @@
                         </td>
                         <td data-label="Date">${orderDate}</td>
                         <td data-label="Actions">
-                            <button class="action-btn action-btn-view" onclick="event.stopPropagation(); viewOrder('${order.orderId || order.id}')">
+                            <button class="action-btn action-btn-view" onclick="event.stopPropagation(); viewOrder('${order.orderId}')">
                                 <i class="fas fa-eye"></i>
                             </button>
-                            <button class="action-btn action-btn-edit" onclick="event.stopPropagation(); editOrderStatus('${order.orderId || order.id}')">
+                            <button class="action-btn action-btn-edit" onclick="event.stopPropagation(); editOrderStatus('${order.orderId}')">
                                 <i class="fas fa-edit"></i>
                             </button>
                         </td>
@@ -1363,7 +1363,7 @@
 
         // View order details
         function viewOrder(orderId) {
-            const order = allOrders.find(o => (o.orderId || o.id) === orderId);
+            const order = allOrders.find(o => o.orderId === orderId);
             if (!order) {
                 showToast('Order not found', 'error');
                 return;
@@ -1376,7 +1376,7 @@
                 <div class="modal-dialog modal-lg">
                     <div class="modal-content">
                         <div class="modal-header">
-                            <h5 class="modal-title">Order Details - ${order.orderId || order.id}</h5>
+                            <h5 class="modal-title">Order Details - ${order.orderId}</h5>
                             <button type="button" class="btn-close" data-bs-dismiss="modal"></button>
                         </div>
                         <div class="modal-body">
@@ -1403,7 +1403,7 @@
 
         // Edit order status
         function editOrderStatus(orderId) {
-            const order = allOrders.find(o => (o.orderId || o.id) === orderId);
+            const order = allOrders.find(o => o.orderId === orderId);
             if (!order) {
                 showToast('Order not found', 'error');
                 return;
@@ -1418,7 +1418,7 @@
                 <div class="modal-dialog">
                     <div class="modal-content">
                         <div class="modal-header">
-                            <h5 class="modal-title">Update Order Status - ${order.orderId || order.id}</h5>
+                            <h5 class="modal-title">Update Order Status - ${order.orderId}</h5>
                             <button type="button" class="btn-close" data-bs-dismiss="modal"></button>
                         </div>
                         <div class="modal-body">
@@ -1455,14 +1455,14 @@
                 const userId = order.userId || order.email || 'guest';
                 if (userId === 'guest') {
                     const orders = JSON.parse(localStorage.getItem('coffeeOrders') || '[]');
-                    const orderIndex = orders.findIndex(o => (o.orderId || o.id) === orderId);
+                    const orderIndex = orders.findIndex(o => o.orderId === orderId);
                     if (orderIndex !== -1) {
                         orders[orderIndex] = order;
                         localStorage.setItem('coffeeOrders', JSON.stringify(orders));
                     }
                 } else {
                     const userOrders = JSON.parse(localStorage.getItem(`orders_${userId}`) || '[]');
-                    const orderIndex = userOrders.findIndex(o => (o.orderId || o.id) === orderId);
+                    const orderIndex = userOrders.findIndex(o => o.orderId === orderId);
                     if (orderIndex !== -1) {
                         userOrders[orderIndex] = order;
                         localStorage.setItem(`orders_${userId}`, JSON.stringify(userOrders));
@@ -1513,7 +1513,7 @@
             document.getElementById('searchOrders').addEventListener('input', function(e) {
                 const searchTerm = e.target.value.toLowerCase();
                 filteredOrders = allOrders.filter(order => 
-                    (order.orderId || order.id || '').toLowerCase().includes(searchTerm) ||
+                    (order.orderId || '').toLowerCase().includes(searchTerm) ||
                     (order.deliveryAddress && order.deliveryAddress.toLowerCase().includes(searchTerm)) ||
                     (order.email && order.email.toLowerCase().includes(searchTerm))
                 );

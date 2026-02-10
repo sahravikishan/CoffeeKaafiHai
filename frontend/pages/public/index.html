@@ -1129,8 +1129,7 @@
             text-shadow: 1px 1px 2px rgba(0, 0, 0, 0.2);
         }
 
-        /* Remove menu toast emoji for navbar/profile-style toasts */
-        .toast-notification .toast-message::before {
+        .toast-notification.toast-info .toast-message::before {
             content: none;
             display: none;
         }
@@ -1194,6 +1193,7 @@
 </head>
 
 <body>
+    <div class="toast-container" id="toastContainer"></div>
     <!-- Navigation -->
     <nav class="navbar navbar-expand-lg navbar-dark fixed-top" id="mainNav">
         <div class="container">
@@ -1952,49 +1952,6 @@
     <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/js/bootstrap.bundle.min.js"></script>
     
     <script>
-        let activeToast = null;
-        let toastTimeout = null;
-
-        function showToast(message, type = 'success') {
-            const toastContainer = document.getElementById('toastContainer') || (function() {
-                const c = document.createElement('div');
-                c.id = 'toastContainer';
-                c.className = 'toast-container';
-                document.body.appendChild(c);
-                return c;
-            })();
-
-            if (activeToast && activeToast.parentNode) {
-                clearTimeout(toastTimeout);
-                activeToast.remove();
-                activeToast = null;
-            }
-
-            const toast = document.createElement('div');
-            toast.className = `toast-notification toast-${type}`;
-
-            let icon = '';
-            switch(type) {
-                case 'success': icon = '<i class="fas fa-check-circle toast-icon"></i>'; break;
-                case 'error': icon = '<i class="fas fa-times-circle toast-icon"></i>'; break;
-                case 'warning': icon = '<i class="fas fa-exclamation-triangle toast-icon"></i>'; break;
-                case 'info': icon = '<i class="fas fa-info-circle toast-icon"></i>'; break;
-            }
-
-            toast.innerHTML = `${icon}<div class="toast-content"><p class="toast-message">${message}</p></div>`;
-            toastContainer.appendChild(toast);
-            activeToast = toast;
-
-            toastTimeout = setTimeout(() => {
-                if (toast.parentNode) {
-                    toast.remove();
-                    if (activeToast === toast) {
-                        activeToast = null;
-                    }
-                }
-            }, 4000);
-        }
-
         // Check if user is logged in via Django context and redirect to profile
         document.addEventListener('DOMContentLoaded', function() {
             // Check Django context variable passed to template
@@ -2199,13 +2156,13 @@
                         window.dispatchEvent(new Event('storage'));
                         window.dispatchEvent(new CustomEvent('profileUpdated'));
                         updateAuthLinks();
-                        if (window.showToast && typeof window.showToast === 'function') {
-                            window.showToast('Logged out successfully.', 'info');
+                        if (typeof showToast === 'function') {
+                            showToast('Logged out successfully.', 'info');
                         }
                         // redirect to home
                         setTimeout(function() {
                             window.location.href = '/';
-                        }, 4500);
+                        }, 3500);
                     });
                 }
 
@@ -2794,15 +2751,17 @@
             
             // Add scroll listener for floating button
             window.addEventListener('scroll', handleFloatingButtonVisibility);
+            window.addEventListener('resize', syncTestimonialCardSizes);
         });
 
         // Update Testimonials Section with 4+ star ratings (Queue Structure - FIFO)
+        const renderedFeedbackKeys = new Set();
         function updateFeedbackCards() {
             const feedbacks = JSON.parse(localStorage.getItem('customerFeedbacks') || '[]');
             
             // Queue: newest 4+ appears first, older shift down (max 3)
             const topFeedbacks = feedbacks
-                .filter(f => f.rating >= 4)
+                .filter(f => Number(f.rating) >= 4)
                 .sort((a, b) => new Date(b.timestamp) - new Date(a.timestamp))
                 .slice(0, 3);
 
@@ -2810,7 +2769,8 @@
             
             if (topFeedbacks.length === 0) {
                 // Show default testimonials if no feedback yet
-                container.innerHTML = `
+                if (container.querySelectorAll('[data-feedback-key]').length === 0) {
+                    container.innerHTML = `
                     <div class="col-lg-4 col-md-6">
                         <div class="testimonial-card animate-in">
                             <div class="stars" align="center">
@@ -2860,16 +2820,42 @@
                         </div>
                     </div>
                 `;
+                }
                 return;
             }
 
-            // Clear and rebuild with submitted feedback
-            container.innerHTML = '';
+            const getFeedbackKey = (feedback) => `${feedback.timestamp || ''}::${feedback.name || ''}::${feedback.message || ''}`;
+            const FEEDBACK_PREVIEW_LIMIT = 160;
+            const desiredKeys = topFeedbacks.map(getFeedbackKey);
+
+            // Remove default testimonials once real feedback exists
+            Array.from(container.children).forEach(child => {
+                if (!child.dataset || !child.dataset.feedbackKey) {
+                    child.remove();
+                }
+            });
+
+            // Remove cards not in the latest top 3
+            const existing = new Map();
+            Array.from(container.children).forEach(child => {
+                const key = child.dataset ? child.dataset.feedbackKey : '';
+                if (!desiredKeys.includes(key)) {
+                    child.remove();
+                } else {
+                    existing.set(key, child);
+                }
+            });
+
+            // Ensure only top 3 are shown, most recent first
             topFeedbacks.forEach(feedback => {
+                const key = getFeedbackKey(feedback);
+                let col = existing.get(key);
+                if (!col) {
                 // Generate star HTML with half-star support
                 let starsHtml = '';
-                const fullRating = Math.floor(feedback.rating);
-                const hasHalf = feedback.rating % 1 !== 0;
+                const rating = Number(feedback.rating);
+                const fullRating = Math.floor(rating);
+                const hasHalf = rating % 1 !== 0;
                 
                 for (let i = 0; i < fullRating; i++) {
                     starsHtml += '<i class="fas fa-star"></i>';
@@ -2878,9 +2864,10 @@
                     starsHtml += '<i class="fas fa-star-half-alt"></i>';
                 }
                 
-                const col = document.createElement('div');
-                col.className = 'col-lg-4 col-md-6';
-                col.innerHTML = `
+                    col = document.createElement('div');
+                    col.className = 'col-lg-4 col-md-6';
+                    col.dataset.feedbackKey = key;
+                    col.innerHTML = `
                     <div class="testimonial-card animate-in">
                         <div class="stars" align="center">
                             ${starsHtml}
@@ -2892,7 +2879,39 @@
                         </div>
                     </div>
                 `;
+                    const textEl = col.querySelector('.testimonial-text');
+                    if (textEl) {
+                        const fullText = `"${feedback.message}"`;
+                        if (fullText.length > FEEDBACK_PREVIEW_LIMIT) {
+                            const truncated = fullText.slice(0, FEEDBACK_PREVIEW_LIMIT).trimEnd();
+                            textEl.textContent = `${truncated}…more`;
+                            textEl.dataset.fullText = fullText;
+                            textEl.dataset.truncated = '1';
+                            textEl.addEventListener('click', function () {
+                                if (this.dataset.truncated !== '1') return;
+                                this.textContent = this.dataset.fullText;
+                                this.dataset.truncated = '0';
+                            }, { once: true });
+                        } else {
+                            textEl.textContent = fullText;
+                        }
+                    }
+                }
                 container.appendChild(col);
+            });
+
+            renderedFeedbackKeys.clear();
+            desiredKeys.forEach(key => renderedFeedbackKeys.add(key));
+            syncTestimonialCardSizes();
+        }
+
+        function syncTestimonialCardSizes() {
+            const featureCard = document.querySelector('.features-section .feature-card');
+            if (!featureCard) return;
+            const targetHeight = Math.ceil(featureCard.getBoundingClientRect().height);
+            if (!targetHeight) return;
+            document.querySelectorAll('.testimonials-section .testimonial-card').forEach(card => {
+                card.style.minHeight = `${targetHeight}px`;
             });
         }
 

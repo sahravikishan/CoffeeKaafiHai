@@ -786,9 +786,20 @@ class CheckoutManager {
     }
 
     generateOrderId() {
-        const timestamp = Date.now();
-        const random = Math.floor(Math.random() * 1000);
-        return `ORD-${timestamp}-${random}`;
+        const now = new Date();
+        const y = now.getFullYear();
+        const m = String(now.getMonth() + 1).padStart(2, '0');
+        const d = String(now.getDate()).padStart(2, '0');
+        const datePart = `${y}${m}${d}`;
+        let rand = '';
+        if (window.crypto && window.crypto.getRandomValues) {
+            const bytes = new Uint8Array(2);
+            window.crypto.getRandomValues(bytes);
+            rand = Array.from(bytes).map(b => (b % 36).toString(36).toUpperCase()).join('');
+        } else {
+            rand = Math.random().toString(36).slice(2, 6).toUpperCase();
+        }
+        return `CKH-${datePart}-${rand}`;
     }
 
     showOrderConfirmation(order) {

@@ -1397,13 +1397,15 @@ def admin_mongo_users(request):
         return JsonResponse({'message': str(e)}, status=500)
 
 
-@login_required
-@user_passes_test(lambda u: u.is_staff or u.is_superuser)
 @csrf_exempt
 @require_http_methods(["PATCH", "DELETE"])
 def admin_mongo_user_detail(request, email):
     """Update or delete a MongoDB user by email."""
     try:
+        if not request.user.is_authenticated or not (
+            request.user.is_staff or request.user.is_superuser or request.user.email == email
+        ):
+            return JsonResponse({'message': 'Forbidden'}, status=403)
         if request.method == "DELETE":
             db = get_database()
             result = db['users'].delete_one({'email': email})

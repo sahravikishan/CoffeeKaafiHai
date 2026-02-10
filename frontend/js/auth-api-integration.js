@@ -268,7 +268,7 @@ async function handleLogin(email, password) {
                     try {
                         const normalized = ordersResp.orders.map(o => ({
                             ...o,
-                            orderId: o.orderId || o.id || o._id || o.clientOrderId || '',
+                            orderId: o.orderId || o._id || '',
                             total: (typeof o.total === 'number') ? o.total : (typeof o.totalAmount === 'number' ? o.totalAmount : Number(o.totalAmount || o.total || 0)),
                             date: o.date || o.orderDate || o.createdAt || '',
                             dateDisplay: o.dateDisplay || (o.createdAt ? new Date(o.createdAt).toLocaleString() : '')
@@ -323,7 +323,7 @@ async function handleLogin(email, password) {
  */
 async function handleForgotPassword(email) {
     try {
-        const response = await apiRequest('/auth/forgot-password/', 'POST', {
+        const response = await apiRequest('/auth/password/forgot/', 'POST', {
             email: email
         });
         
@@ -339,7 +339,7 @@ async function handleForgotPassword(email) {
  */
 async function handleResetPassword(email, otp, newPassword) {
     try {
-        const response = await apiRequest('/auth/reset-password/', 'POST', {
+        const response = await apiRequest('/auth/password/reset/', 'POST', {
             email: email,
             otp: otp,
             newPassword: newPassword
@@ -357,12 +357,12 @@ async function handleResetPassword(email, otp, newPassword) {
  */
 async function handleValidateOTP(email, otp) {
     try {
-        const response = await apiRequest('/validate-otp/', 'POST', {
+        const response = await apiRequest('/auth/password/verify-otp/', 'POST', {
             email: email,
             otp: otp
         });
         
-        return response.valid || false;
+        return (response.message || '').toLowerCase().includes('verified') || false;
         
     } catch (error) {
         console.error('OTP validation error:', error);

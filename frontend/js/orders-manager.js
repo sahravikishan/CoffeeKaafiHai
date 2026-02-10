@@ -425,7 +425,19 @@ async function getAllOrders() {
         const response = await fetch('/api/orders/', { credentials: 'same-origin' });
         if (response.ok) {
             const data = await response.json();
-            return data.orders || [];
+            const orders = Array.isArray(data.orders) ? data.orders : [];
+            const existingIds = new Set();
+            const orderIdMap = loadOrderIdMap(userId);
+            let mapDirty = false;
+            orders.forEach(order => {
+                if (ensureOrderIdOnce(order, existingIds, orderIdMap)) {
+                    mapDirty = true;
+                }
+            });
+            if (mapDirty) {
+                saveOrderIdMap(userId, orderIdMap);
+            }
+            return orders;
         }
         return [];
     } catch (e) {
@@ -536,6 +548,126 @@ async function updateProfileStats() {
     return stats;
 }
 
+const ORDER_ID_PREFIX = 'CKH';
+const MIN_ORDER_ID_LENGTH = 8;
+const ORDER_ID_RANDOM_LEN = 6;
+const ORDER_ID_PATTERN = new RegExp(`^${ORDER_ID_PREFIX}-\\d{8}-(?:[A-Z0-9]{3}-)?[A-Z0-9]{4,}$`, 'i');
+
+function getCoffeeTypeCode(data) {
+    const raw = data && (data.coffeeTypeCode || data.coffeeType || data.coffee || data.type);
+    if (!raw) return '';
+    const cleaned = String(raw).replace(/[^a-z0-9]/gi, '').toUpperCase();
+    return cleaned.length >= 3 ? cleaned.slice(0, 3) : '';
+}
+
+function isWeakOrderId(value) {
+    if (value === null || value === undefined) return true;
+    const str = String(value).trim();
+    if (!str) return true;
+    if (/^\d+$/.test(str)) return true;
+    if (str.length < MIN_ORDER_ID_LENGTH) return true;
+    if (!ORDER_ID_PATTERN.test(str)) return true;
+    return false;
+}
+
+function randomAlphaNum(length) {
+    const chars = 'ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789';
+    const out = new Array(length);
+    if (window.crypto && typeof window.crypto.randomUUID === 'function') {
+        let raw = '';
+        while (raw.length < length) {
+            raw += window.crypto.randomUUID().replace(/-/g, '');
+        }
+        raw = raw.toUpperCase();
+        for (let i = 0; i < length; i++) {
+            const nibble = parseInt(raw[i], 16);
+            out[i] = chars[nibble % chars.length];
+        }
+    } else if (window.crypto && window.crypto.getRandomValues) {
+        const bytes = new Uint8Array(length);
+        window.crypto.getRandomValues(bytes);
+        for (let i = 0; i < length; i++) {
+            out[i] = chars[bytes[i] % chars.length];
+        }
+    } else {
+        for (let i = 0; i < length; i++) {
+            out[i] = chars[Math.floor(Math.random() * chars.length)];
+        }
+    }
+    return out.join('');
+}
+
+function getOrderIdStorageKey(userId) {
+    return `orderIdMap_${userId || 'guest'}`;
+}
+
+function loadOrderIdMap(userId) {
+    try {
+        const raw = localStorage.getItem(getOrderIdStorageKey(userId));
+        return raw ? JSON.parse(raw) : {};
+    } catch (e) {
+        console.warn('Failed to load orderId map:', e);
+        return {};
+    }
+}
+
+function saveOrderIdMap(userId, map) {
+    try {
+        localStorage.setItem(getOrderIdStorageKey(userId), JSON.stringify(map));
+    } catch (e) {
+        console.warn('Failed to save orderId map:', e);
+    }
+}
+
+function getOrderIdStableKey(order) {
+    const key = order && (order._id || order.id || order.orderId || order.createdAt || order.date || order.orderDate);
+    return key ? String(key).trim() : '';
+}
+
+function ensureOrderIdOnce(order, existingIds, orderIdMap) {
+    const current = order.orderId || order._id || order.id;
+    if (!isWeakOrderId(current)) {
+        order.orderId = String(current);
+        if (existingIds) existingIds.add(order.orderId);
+        return false;
+    }
+
+    const stableKey = getOrderIdStableKey(order);
+    if (stableKey && orderIdMap && orderIdMap[stableKey]) {
+        order.orderId = String(orderIdMap[stableKey]);
+        if (existingIds) existingIds.add(order.orderId);
+        return false;
+    }
+
+    const newId = generateOrderId(existingIds, order);
+    order.orderId = String(newId);
+    if (stableKey && orderIdMap) {
+        orderIdMap[stableKey] = order.orderId;
+        return true;
+    }
+    return false;
+}
+
+function generateOrderId(existingIds, data) {
+    const now = new Date();
+    const y = now.getFullYear();
+    const m = String(now.getMonth() + 1).padStart(2, '0');
+    const d = String(now.getDate()).padStart(2, '0');
+    const datePart = `${y}${m}${d}`;
+    const coffeeCode = getCoffeeTypeCode(data);
+    const prefix = coffeeCode
+        ? `${ORDER_ID_PREFIX}-${datePart}-${coffeeCode}-`
+        : `${ORDER_ID_PREFIX}-${datePart}-`;
+    let candidate = '';
+    let attempts = 0;
+    do {
+        candidate = `${prefix}${randomAlphaNum(ORDER_ID_RANDOM_LEN)}`;
+        attempts += 1;
+    } while (existingIds && existingIds.has(candidate) && attempts < 10);
+    if (existingIds) existingIds.add(candidate);
+    return candidate;
+}
+
 /**
  * Display recent orders in the UI
  * @param {number} limit - Optional limit for number of orders to display
@@ -567,6 +699,8 @@ async function displayRecentOrders(limit) {
     }
 
     ordersToShow.forEach(order => {
+        const displayOrderId = order.orderId || '';
+
         // Get status text for display
         function getStatusText(status) {
             const statusMap = {
@@ -607,7 +741,7 @@ async function displayRecentOrders(limit) {
         const orderHTML = `
             <div class="order-item">
                 <div class="order-header">
-                    <span class="order-id">${order.id || order.orderId || ''}</span>
+                    <span class="order-id">${displayOrderId}</span>
                     <span class="order-status ${statusClass}">${statusText}</span>
                 </div>
                 <div class="order-details">
@@ -616,8 +750,8 @@ async function displayRecentOrders(limit) {
                 </div>
                 <div class="order-total">Total: ₹${totalAmount}</div>
                 <div style="margin-top:12px;display:flex;gap:10px;flex-wrap:wrap">
-                    <a href="/order-tracking/?orderId=${encodeURIComponent(order.orderId || order.id || '')}" class="btn btn-sm" style="background:linear-gradient(135deg,#6f4e37,#8b5e3c);color:#fff;border-radius:12px;padding:8px 14px;text-decoration:none">&nbsp;<i class="fas fa-route"></i>&nbsp;Track</a>
-                    ${canCancel ? `<button class="btn btn-sm btn-danger profile-cancel-order" data-order-id="${order.orderId || order.id || ''}" style="padding:8px 14px;border-radius:12px">&nbsp;<i class="fas fa-times-circle"></i>&nbsp;Cancel</button>` : ''}
+                    <a href="/order-tracking/?orderId=${encodeURIComponent(displayOrderId)}" class="btn btn-sm" style="background:linear-gradient(135deg,#6f4e37,#8b5e3c);color:#fff;border-radius:12px;padding:8px 14px;text-decoration:none">&nbsp;<i class="fas fa-route"></i>&nbsp;Track</a>
+                    ${canCancel ? `<button class="btn btn-sm btn-danger profile-cancel-order" data-order-id="${displayOrderId}" style="padding:8px 14px;border-radius:12px">&nbsp;<i class="fas fa-times-circle"></i>&nbsp;Cancel</button>` : ''}
                 </div>
             </div>
         `;
@@ -677,9 +811,20 @@ async function addNewOrder(orderData, options = {}) {
     // Ensure an orderId/id exists
     const allOrders = await getAllOrders();
     const safeOrders = Array.isArray(allOrders) ? allOrders : [];
-    const genId = `ORD-${Date.now()}-${String(safeOrders.length + 1).padStart(3, '0')}`;
-    newOrder.orderId = orderData.orderId || orderData.id || genId;
-    newOrder.id = newOrder.id || newOrder.orderId;
+    const existingIds = new Set(
+        safeOrders
+            .map(o => o.orderId)
+            .filter(Boolean)
+            .map(v => String(v))
+    );
+    const incomingId = orderData.orderId || newOrder.orderId;
+    let finalId = incomingId;
+    if (isWeakOrderId(finalId) || existingIds.has(String(finalId))) {
+        finalId = generateOrderId(existingIds, orderData);
+    } else {
+        existingIds.add(String(finalId));
+    }
+    newOrder.orderId = String(finalId);
 
     // Normalize date fields
     newOrder.orderDate = orderData.orderDate || orderData.date || new Date().toISOString();
@@ -764,16 +909,7 @@ class OrdersManager {
      * @returns {Promise<Array>} Array of all orders
      */
     async getOrders() {
-        const res = await fetch('/api/orders/', {
-            credentials: 'same-origin'
-        });
-
-        if (!res.ok) {
-            return [];
-        }
-
-        const data = await res.json();
-        return Array.isArray(data.orders) ? data.orders : [];
+        return await getAllOrders();
     }
 
     /**
@@ -785,9 +921,7 @@ class OrdersManager {
         // MongoDB Query: db.collection("orders").findOne(...)
         const allOrders = await getAllOrders();
         return allOrders.find(order => 
-            (order.orderId && order.orderId === orderId) || 
-            (order.id && order.id === orderId) ||
-            (order._id && order._id === orderId)
+            (order.orderId && order.orderId === orderId)
         );
     }
 
@@ -812,7 +946,7 @@ class OrdersManager {
         // Persist cancellation to backend
         try {
             const payload = {
-                orderId: order.orderId || order.id,
+                orderId: order.orderId,
                 clientOrderId: order.clientOrderId || null,
                 reason: reason || ''
             };
@@ -1213,9 +1347,26 @@ async function generateUserDataPDF(startDate = null, endDate = null) {
         doc.setTextColor(139, 69, 19);
         doc.text('User Data Report', pageWidth / 2, 80, { align: 'center' });
 
+        function formatPdfDateTime(value) {
+            const d = value ? new Date(value) : null;
+            if (!d || isNaN(d.getTime())) return '';
+            const parts = new Intl.DateTimeFormat('en-GB', {
+                day: '2-digit',
+                month: 'short',
+                year: 'numeric',
+                hour: 'numeric',
+                minute: '2-digit',
+                hour12: true
+            }).formatToParts(d);
+            const map = {};
+            parts.forEach(p => { map[p.type] = p.value; });
+            const dayPeriod = (map.dayPeriod || '').toLowerCase();
+            return `${map.day} ${map.month} ${map.year}, ${map.hour}:${map.minute} ${dayPeriod}`.trim();
+        }
+
         doc.setFontSize(9);
         doc.setTextColor(120, 120, 120);
-        doc.text(`Generated: ${new Date().toLocaleString()}`, pageWidth / 2, 88, { align: 'center' });
+        doc.text(`Generated: ${formatPdfDateTime(new Date())}`, pageWidth / 2, 88, { align: 'center' });
 
         doc.setDrawColor(210, 180, 140);
         doc.setLineWidth(0.5);
@@ -1304,8 +1455,6 @@ async function generateUserDataPDF(startDate = null, endDate = null) {
             doc.text('No orders found for the selected date range.', marginLeft + 5, yPos);
             yPos += 6;
         } else {
-            let orderNo = 1;
-
             ordersToDisplay.forEach(order => {
                 const titleHeight = 6;
                 const lineHeight = 5;
@@ -1318,7 +1467,10 @@ async function generateUserDataPDF(startDate = null, endDate = null) {
                 const itemsLines = doc.splitTextToSize(`Items: ${itemsText}`, availableWidthForItems);
                 const itemsHeight = Math.max(itemsLines.length, 1) * lineHeight;
 
-                const dateLines = doc.splitTextToSize(`Date: ${order.dateDisplay || ''}`, availableWidthForItems);
+                const dateValue =
+                    formatPdfDateTime(order.date) ||
+                    formatPdfDateTime(order.orderDate);
+                const dateLines = doc.splitTextToSize(`Date: ${dateValue || ''}`, availableWidthForItems);
                 const dateHeight = Math.max(dateLines.length, 1) * lineHeight;
 
                 const totalHeight = 6;
@@ -1328,11 +1480,12 @@ async function generateUserDataPDF(startDate = null, endDate = null) {
                 checkPageBreak(requiredSpace);
 
                 // Order header
+                const pdfOrderId = (order && order.orderId) ? String(order.orderId) : 'N/A';
                 doc.setFont('helvetica', 'bold');
                 doc.setFontSize(11);
                 doc.setTextColor(139, 69, 19); // keep original brown
                 doc.text(
-                    `${orderNo}. Order ${order.id || order.orderId} — ${order.status}`,
+                    `Order ID: ${pdfOrderId} — ${order.status}`,
                     marginLeft + 5,
                     yPos
                 );
@@ -1385,7 +1538,6 @@ async function generateUserDataPDF(startDate = null, endDate = null) {
                 doc.line(marginLeft + 5, yPos, pageWidth - marginRight, yPos);
                 yPos += dividerHeight;
 
-                orderNo++;
             });
         }
 
@@ -1623,6 +1775,10 @@ function saveNotificationPreferences(prefs) {
  * @param {string} type - Type of toast (success, error, warning, info)
  */
 function showToast(message, type = 'success') {
+    const toastState = window.__profileToastState || (window.__profileToastState = {
+        activeToast: null,
+        toastTimeout: null
+    });
     const toastContainer = document.getElementById('toastContainer') || (function() {
         const c = document.createElement('div');
         c.id = 'toastContainer';
@@ -1631,10 +1787,10 @@ function showToast(message, type = 'success') {
         return c;
     })();
 
-    if (activeToast && activeToast.parentNode) {
-        clearTimeout(toastTimeout);
-        activeToast.remove();
-        activeToast = null;
+    if (toastState.activeToast && toastState.activeToast.parentNode) {
+        clearTimeout(toastState.toastTimeout);
+        toastState.activeToast.remove();
+        toastState.activeToast = null;
     }
     
     const toast = document.createElement('div');
@@ -1650,13 +1806,13 @@ function showToast(message, type = 'success') {
     
     toast.innerHTML = `${icon}<div class="toast-content"><p class="toast-message">${message}</p></div>`;
     toastContainer.appendChild(toast);
-    activeToast = toast;
+    toastState.activeToast = toast;
     
-    toastTimeout = setTimeout(() => {
+    toastState.toastTimeout = setTimeout(() => {
         if (toast.parentNode) {
             toast.remove();
-            if (activeToast === toast) {
-                activeToast = null;
+            if (toastState.activeToast === toast) {
+                toastState.activeToast = null;
             }
         }
     }, 4000);
@@ -1880,7 +2036,7 @@ function clearAuthSessionOnly() {
 
         // Remove only auth/session keys
         const keys = ['userEmail', 'isLoggedIn', 'currentUser',
-                     'name', 'profilePhoto', 'email', 'userFirstName', 'userLastName', 'userPhone',
+                     'name', 'profilePhoto', 'email', 'phone', 'userFirstName', 'userLastName', 'userPhone',
                      'accessToken', 'refreshToken', 'userSession', 'rememberMe'];
         keys.forEach(k => localStorage.removeItem(k));
         try { sessionStorage.removeItem('userSession'); } catch (e) { /* ignore */ }
@@ -2123,12 +2279,16 @@ function setupLogoutHandlers() {
             } catch (e) {
                 console.warn('logout: failed during profile persistence', e);
             }
-            clearAuthSessionOnly();
             closeModal('logoutModal');
             showToast('Logged out successfully.', 'info');
+            clearAuthSessionOnly();
             setTimeout(function() {
-                window.location.href = '/';
-            }, 4500);
+                if (location.href && location.href.indexOf('/profile/') !== -1) {
+                    window.location.href = '/login/';
+                } else {
+                    window.location.href = '/';
+                }
+            }, 3500);
         });
     }
 }
@@ -2146,13 +2306,39 @@ function setupDeleteAccountHandlers() {
     
     const confirmDeleteBtn = document.getElementById('confirmDeleteBtn');
     if (confirmDeleteBtn) {
-        confirmDeleteBtn.addEventListener('click', function() {
-            closeModal('deleteModal');
-            localStorage.clear();
-            showToast('Account deleted. Redirecting to home page...', 'warning');
-            setTimeout(function() {
-                window.location.href = '/';
-            }, 2500);
+        confirmDeleteBtn.addEventListener('click', async function() {
+            const email = localStorage.getItem('currentUser') || localStorage.getItem('userEmail');
+            if (!email) {
+                closeModal('deleteModal');
+                showToast('User session expired. Please log in again.', 'error');
+                return;
+            }
+
+            try {
+                const resp = await fetch(`/api/admin/mongo-users/${encodeURIComponent(email)}/`, {
+                    method: 'DELETE',
+                    credentials: 'same-origin'
+                });
+
+                if (!resp.ok) {
+                    const errData = await resp.json().catch(() => ({}));
+                    closeModal('deleteModal');
+                    showToast(errData && errData.message ? errData.message : 'Unable to delete account. Please try again.', 'error');
+                    return;
+                }
+
+                closeModal('deleteModal');
+                clearAuthSessionOnly();
+                localStorage.clear();
+                try { sessionStorage.clear(); } catch (e) { /* ignore */ }
+                showToast('Account deleted. Redirecting to home page...', 'warning');
+                setTimeout(function() {
+                    window.location.href = '/';
+                }, 2500);
+            } catch (e) {
+                closeModal('deleteModal');
+                showToast('Unable to delete account. Please try again.', 'error');
+            }
         });
     }
 }
@@ -2428,3 +2614,4 @@ window.DynamicProfileManager = {
     closeModal,
     showCancelOrderModal
 };
+

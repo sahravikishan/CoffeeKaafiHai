@@ -104,6 +104,27 @@ class UserActivity(models.Model):
     created_at = models.DateTimeField(auto_now_add=True, db_index=True)
 
 
+class PasswordResetOTP(models.Model):
+    """One-time password for Django User password reset."""
+    user = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        on_delete=models.CASCADE,
+        related_name='password_reset_otps'
+    )
+    email = models.EmailField(db_index=True)
+    otp = models.CharField(max_length=6)
+    created_at = models.DateTimeField(auto_now_add=True, db_index=True)
+    expires_at = models.DateTimeField(db_index=True)
+    is_used = models.BooleanField(default=False)
+    attempts = models.PositiveSmallIntegerField(default=0)
+    last_attempt_at = models.DateTimeField(null=True, blank=True)
+    is_verified = models.BooleanField(default=False)
+    verified_at = models.DateTimeField(null=True, blank=True)
+
+    def __str__(self):
+        return f"{self.email} - {self.otp}"
+
+
 class Feedback(models.Model):
     """Persistent customer feedback stored in the database."""
     user = models.ForeignKey(
