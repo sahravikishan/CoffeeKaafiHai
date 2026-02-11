@@ -26,8 +26,8 @@ urlpatterns = [
     path('auth/password/reset/', password_reset_views.reset_password, name='api_password_reset'),
     
     # Admin Mongo User Management
-    path('admin/mongo-users/', views.admin_mongo_users, name='admin_mongo_users'),
-    path('admin/mongo-users/<str:email>/', views.admin_mongo_user_detail, name='admin_mongo_user_detail'),
+    path('staff/mongo-users/', views.admin_mongo_users, name='admin_mongo_users'),
+    path('staff/mongo-users/<str:email>/', views.admin_mongo_user_detail, name='admin_mongo_user_detail'),
 
     # Payment Endpoints
     path('payment/create-order/', views.create_order, name='create_order'),

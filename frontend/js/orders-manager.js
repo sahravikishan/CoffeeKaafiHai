@@ -2377,7 +2377,7 @@ function setupDeleteAccountHandlers() {
             }
 
             try {
-                const resp = await fetch(`/api/admin/mongo-users/${encodeURIComponent(email)}/`, {
+                const resp = await fetch(`/api/staff/mongo-users/${encodeURIComponent(email)}/`, {
                     method: 'DELETE',
                     credentials: 'same-origin'
                 });

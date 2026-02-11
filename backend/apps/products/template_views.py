@@ -170,25 +170,25 @@ def order_tracking(request):
 @ensure_csrf_cookie
 def admin_login(request):
     """Render admin login page"""
-    return render(request, 'pages/admin/admin-login.html')
+    return render(request, 'pages/staff-admin/staff-login.html')
 
 
 @ensure_csrf_cookie
 def admin_signup(request):
     """Render admin signup page"""
-    return render(request, 'pages/admin/admin-signup.html')
+    return render(request, 'pages/staff-admin/staff-signup.html')
 
 
 @ensure_csrf_cookie
 def admin_forgot_password(request):
     """Render admin forgot password page"""
-    return render(request, 'pages/admin/admin-forgot-password.html')
+    return render(request, 'pages/staff-admin/staff-forgot-password.html')
 
 
 @ensure_csrf_cookie
 def admin_reset_password(request):
     """Render admin reset password page"""
-    return render(request, 'pages/admin/admin-reset-password.html')
+    return render(request, 'pages/staff-admin/staff-reset-password.html')
 
 
 @ensure_csrf_cookie
@@ -216,11 +216,11 @@ def admin_dashboard(request):
     except Exception as e:
         print(f"Error fetching admin data: {e}")
 
-    return render(request, 'pages/admin/admin-dashboard.html', context)
+    return render(request, 'pages/staff-admin/staff-dashboard.html', context)
 
 @login_required
 @user_passes_test(lambda u: u.is_staff or u.is_superuser)
 @ensure_csrf_cookie
 def admin_mongo_users(request):
     """Render admin page for MongoDB user management."""
-    return render(request, 'pages/admin/admin-mongo-users.html')
+    return render(request, 'pages/staff-admin/staff-mongo-users.html')

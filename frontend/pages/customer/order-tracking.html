@@ -334,6 +334,20 @@
             box-shadow: 0 8px 30px rgba(210, 105, 30, 0.5);
         }
 
+        .tracking-footer-actions {
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            gap: 14px;
+            margin-top: 1.5rem;
+            flex-wrap: wrap;
+        }
+
+        .tracking-footer-actions .btn-back {
+            justify-content: center;
+            min-width: 180px;
+        }
+
         .empty-state {
             text-align: center;
             padding: 60px 20px;
@@ -498,6 +512,14 @@
                 max-width: 250px;
                 padding: 12px 15px;
             }
+
+            .tracking-footer-actions {
+                gap: 10px;
+            }
+
+            .tracking-footer-actions .btn-back {
+                min-width: 160px;
+            }
         }
     </style>
 </head>
@@ -512,11 +534,16 @@
             <!-- Orders will be rendered here -->
         </div>
 
-            <div class="text-center mt-4">
+            <div class="tracking-footer-actions">
             <button class="btn-back" onclick="window.location.href='{% url 'home' %}'">
                 <i class="fas fa-arrow-left"></i>
                 Back to Home
             </button>
+            <button class="btn-back" onclick="window.location.href='{% url 'profile' %}'">
+                Go to Profile
+                <i class="fas fa-arrow-right"></i>
+            </button>
+            </div>
         </div>
     </div>
 

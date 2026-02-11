@@ -27,7 +27,7 @@
   <div class="wrap">
     <div class="header">
       <h1>MongoDB Users</h1>
-      <a href="/admin/dashboard/">Back to Admin Dashboard</a>
+      <a href="/staff-admin/dashboard/">Back to Admin Dashboard</a>
     </div>
 
     <div class="toolbar">
@@ -100,7 +100,7 @@
 
     async function loadUsers() {
       try {
-        const res = await fetch('/api/admin/mongo-users/');
+        const res = await fetch('/api/staff/mongo-users/');
         const data = await res.json();
         users = data.users || [];
         renderRows(users);
@@ -112,7 +112,7 @@
 
     async function updateUser(email, payload) {
       try {
-        const res = await fetch(`/api/admin/mongo-users/${encodeURIComponent(email)}/`, {
+        const res = await fetch(`/api/staff/mongo-users/${encodeURIComponent(email)}/`, {
           method: 'PATCH',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify(payload)
@@ -128,7 +128,7 @@
 
     async function deleteUser(email) {
       try {
-        const res = await fetch(`/api/admin/mongo-users/${encodeURIComponent(email)}/`, {
+        const res = await fetch(`/api/staff/mongo-users/${encodeURIComponent(email)}/`, {
           method: 'DELETE'
         });
         const data = await res.json();

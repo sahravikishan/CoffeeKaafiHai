@@ -49,19 +49,26 @@ urlpatterns = [
     path('order-tracking/', order_tracking, name='order_tracking'),
     
     # Admin Auth Pages
-    path('admin/mongo-users/', admin_mongo_users, name='admin_mongo_users'),
-    path('admin/login/', admin_login, name='admin_login'),
-    path('admin/signup/', admin_signup, name='admin_signup'),
-    path('admin/forgot-password/', admin_forgot_password, name='admin_forgot_password'),
-    path('admin/reset-password/', admin_reset_password, name='admin_reset_password'),
-    path('admin/dashboard/', admin_dashboard, name='admin_dashboard'),
+    path('staff-admin/mongo-users/', admin_mongo_users, name='admin_mongo_users'),
+    path('staff-admin/login/', admin_login, name='admin_login'),
+    path('staff-admin/signup/', admin_signup, name='admin_signup'),
+    path('staff-admin/forgot-password/', admin_forgot_password, name='admin_forgot_password'),
+    path('staff-admin/reset-password/', admin_reset_password, name='admin_reset_password'),
+    path('staff-admin/dashboard/', admin_dashboard, name='admin_dashboard'),
+    # Redirect slashless staff aliases to canonical staff-admin routes
+    path('staff-mongo-users', lambda req: redirect('admin_mongo_users')),
+    path('staff-login', lambda req: redirect('admin_login')),
+    path('staff-signup', lambda req: redirect('admin_signup')),
+    path('staff-forgot-password', lambda req: redirect('admin_forgot_password')),
+    path('staff-reset-password', lambda req: redirect('admin_reset_password')),
+    path('staff-dashboard', lambda req: redirect('admin_dashboard')),
     # Redirect direct admin HTML access to canonical admin routes
-    path('admin-mongo-users.html', lambda req: redirect('admin_mongo_users')),
-    path('admin-login.html', lambda req: redirect('admin_login')),
-    path('admin-signup.html', lambda req: redirect('admin_signup')),
-    path('admin-forgot-password.html', lambda req: redirect('admin_forgot_password')),
-    path('admin-reset-password.html', lambda req: redirect('admin_reset_password')),
-    path('admin-dashboard.html', lambda req: redirect('admin_dashboard')),
+    path('staff-mongo-users.html', lambda req: redirect('admin_mongo_users')),
+    path('staff-login.html', lambda req: redirect('admin_login')),
+    path('staff-signup.html', lambda req: redirect('admin_signup')),
+    path('staff-forgot-password.html', lambda req: redirect('admin_forgot_password')),
+    path('staff-reset-password.html', lambda req: redirect('admin_reset_password')),
+    path('staff-dashboard.html', lambda req: redirect('admin_dashboard')),
     
     path('admin/', lambda req: redirect('/admin-panel/')) ,
 
