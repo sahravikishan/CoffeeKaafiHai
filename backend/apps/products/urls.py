@@ -37,5 +37,7 @@ urlpatterns = [
     # Data Endpoints
     path('orders/', views.get_orders, name='get_orders'),
     path('payments/', views.get_payments, name='get_payments'),
+    path('notifications/', views.notifications_list, name='notifications_list'),
+    path('notifications/broadcast/', views.broadcast_notification, name='broadcast_notification'),
     
 ]

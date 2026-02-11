@@ -12,6 +12,7 @@ from django.views.decorators.csrf import csrf_exempt
 from django.views.decorators.http import require_http_methods
 
 from .models import PasswordResetOTP
+from .email_templates import render_email_template, BRAND_NAME
 from database.models import User as MongoUser
 import bcrypt
 
@@ -48,7 +49,7 @@ def _create_otp_record(user, email):
 
 def _send_otp_email(email, otp):
     subject = "Your Password Reset OTP"
-    from_name = getattr(settings, 'EMAIL_FROM_NAME', 'CoffeeKaafiHai')
+    from_name = BRAND_NAME
     from_email_value = (
         getattr(settings, 'DEFAULT_FROM_EMAIL', None)
         or getattr(settings, 'EMAIL_HOST_USER', None)
@@ -63,31 +64,17 @@ def _send_otp_email(email, otp):
         timezone=ZoneInfo('Asia/Kolkata')
     ).strftime('%a, %d/%m/%Y %I:%M %p')
 
-    html_message = f"""
-    <div style="font-family: Arial, sans-serif; background:#f6f0e9; padding:28px;">
-      <div style="max-width:540px; margin:0 auto; background:#ffffff; border-radius:16px; overflow:hidden; box-shadow:0 10px 28px rgba(31,26,22,0.12);">
-        <div style="padding:24px; background: linear-gradient(135deg, #1f1a16 0%, #3a2f28 100%); text-align:center;">
-          <div style="width:84px; height:84px; margin:0 auto 6px; border-radius:50%; background:#ffffff; box-shadow:0 6px 18px rgba(0,0,0,0.18); text-align:center; line-height:84px;">
-            <span style="display:inline-block; vertical-align:middle; font-size:28px;">☕</span>
-          </div>
-          <h2 style="margin:-8px 0 0; color:#ffffff; font-size:20px; letter-spacing:0.5px;">CoffeeKaafiHai</h2>
-          <p style="margin:6px 0 0; color:#e6ddd6; font-size:13px;">Secure Password Reset</p>
-        </div>
-        <div style="padding:26px 24px;">
-          <h3 style="margin:0 0 10px; color:#1f1a16; font-size:18px; line-height:1.4;">Your OTP Code</h3>
-          <p style="margin:0 0 14px; color:#4a3f35; font-size:14px; line-height:1.5;">Use this one-time password to reset your account:</p>
-          <div style="font-size:30px; letter-spacing:8px; font-weight:700; color:#1f1a16; background:#f5eee6; padding:14px 18px; border-radius:10px; text-align:center; margin:6px 0 10px;">
-            {otp}
-          </div>
-          <p style="margin:0 0 4px; color:#7a6a5a; font-size:13px; line-height:1.5;">This OTP expires in {OTP_EXPIRY_MINUTES} minutes.</p>
-          <p style="margin:0; color:#7a6a5a; font-size:12px; line-height:1.4;">Sent at: {sent_at}</p>
-        </div>
-        <div style="padding:16px 24px; background:#f3ece4; color:#7a6a5a; font-size:12px; text-align:center;">
-          If you didn’t request this, you can safely ignore this email.
-        </div>
-      </div>
-    </div>
-    """
+    html_message = render_email_template(
+        title="Your OTP Code",
+        message="Use this one-time password to reset your account:",
+        code=otp,
+        meta_lines=[
+            f"This OTP expires in {OTP_EXPIRY_MINUTES} minutes.",
+            f"Sent at: {sent_at}"
+        ],
+        footer_note="If you didn't request this, you can safely ignore this email.",
+        header_subtitle="Secure Password Reset"
+    )
 
     msg = EmailMultiAlternatives(subject, text_message, from_email, [email])
     msg.attach_alternative(html_message, "text/html")

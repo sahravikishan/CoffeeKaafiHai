@@ -886,7 +886,7 @@
                             <span class="order-detail-label">Payment Status:</span>
                             <span class="order-detail-value">${order.paymentStatus === 'paid' ? 'Paid' : 'Pay at Counter'}</span>
                         </div>
-                        ${order.deliveryAddress ? `
+                        ${order.orderType !== 'in_shop' && order.deliveryAddress ? `
                         <div class="order-detail-row">
                             <span class="order-detail-label">Delivery Address:</span>
                             <span class="order-detail-value">${order.deliveryAddress}</span>

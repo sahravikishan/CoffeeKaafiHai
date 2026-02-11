@@ -233,7 +233,7 @@ class CheckoutManager {
         const addressStep = document.getElementById('addressStep');
         if (this.orderType === 'in_shop') {
             addressStep.style.display = 'none';
-            this.deliveryAddress = 'In-Shop Pickup – Customer Present';
+            this.deliveryAddress = '';
         } else {
             addressStep.style.display = 'block';
         }
@@ -786,20 +786,28 @@ class CheckoutManager {
     }
 
     generateOrderId() {
+        // Use same algorithm as orders-manager.js for consistency
         const now = new Date();
         const y = now.getFullYear();
         const m = String(now.getMonth() + 1).padStart(2, '0');
         const d = String(now.getDate()).padStart(2, '0');
         const datePart = `${y}${m}${d}`;
-        let rand = '';
+        
+        // Generate 6 uppercase alphanumeric characters
+        const chars = 'ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789';
+        let randomPart = '';
         if (window.crypto && window.crypto.getRandomValues) {
-            const bytes = new Uint8Array(2);
+            const bytes = new Uint8Array(6);
             window.crypto.getRandomValues(bytes);
-            rand = Array.from(bytes).map(b => (b % 36).toString(36).toUpperCase()).join('');
+            for (let i = 0; i < 6; i++) {
+                randomPart += chars[bytes[i] % chars.length];
+            }
         } else {
-            rand = Math.random().toString(36).slice(2, 6).toUpperCase();
+            for (let i = 0; i < 6; i++) {
+                randomPart += chars[Math.floor(Math.random() * chars.length)];
+            }
         }
-        return `CKH-${datePart}-${rand}`;
+        return `CKH-${datePart}-${randomPart}`;
     }
 
     showOrderConfirmation(order) {
@@ -833,7 +841,7 @@ class CheckoutManager {
                         <p><strong>Payment Method:</strong> ${order.paymentMethod === 'razorpay' ? 'Online Payment' : 'Cash on Delivery'}</p>
                         <p><strong>Payment Status:</strong> ${order.paymentStatus === 'paid' ? 'Paid' : 'Pay at Counter'}</p>
                         <p><strong>Order Type:</strong> ${order.orderType === 'in_shop' ? 'In-Shop Pickup' : 'Delivery'}</p>
-                        <p><strong>Delivery Address:</strong> ${order.deliveryAddress}</p>
+                        ${order.orderType !== 'in_shop' && order.deliveryAddress ? `<p><strong>Delivery Address:</strong> ${order.deliveryAddress}</p>` : ''}
                         <div class="order-confirmation-items">
                             <h4>Items:</h4>
                             ${Array.isArray(order.items) ? order.items.map(item => `

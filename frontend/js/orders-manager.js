@@ -156,14 +156,20 @@ async function saveUserProfile(profileData) {
             return false;
         }
         
+        const suppressOrderRefresh = window.__profileSaveReason === 'notif';
+
         // PERMANENT FIX: Save to localStorage
         localStorage.setItem(`userProfile_${currentUser}`, JSON.stringify(profileData));
         userProfileData = profileData;
         updateProfileDisplay();
-        updateProfileStats();
+        if (!suppressOrderRefresh) {
+            updateProfileStats();
+        }
         
         // Notify other tabs/components
-        window.dispatchEvent(new CustomEvent('profileUpdated', { detail: userProfileData }));
+        if (!suppressOrderRefresh) {
+            window.dispatchEvent(new CustomEvent('profileUpdated', { detail: userProfileData }));
+        }
         
         // Mirror key auth info for quick access
         localStorage.setItem('name', `${userProfileData.firstName} ${userProfileData.lastName}`.trim());
@@ -282,6 +288,7 @@ function getCSRFToken() {
  */
 function updateProfileDisplay() {
     if (!userProfileData) return;
+    const suppressOrderRefresh = window.__profileSaveReason === 'notif';
     
     // Update form fields
     const elements = {
@@ -321,10 +328,14 @@ function updateProfileDisplay() {
     
     // Update coffee preferences and stats
     updateCoffeePreferencesDisplay();
-    updateProfileStats();
+    if (!suppressOrderRefresh) {
+        updateProfileStats();
+    }
     
     // Dispatch event for other components
-    window.dispatchEvent(new CustomEvent('profileUpdated', { detail: userProfileData }));
+    if (!suppressOrderRefresh) {
+        window.dispatchEvent(new CustomEvent('profileUpdated', { detail: userProfileData }));
+    }
 }
 
 /**
@@ -535,6 +546,14 @@ async function calculateProfileStats() {
  * @returns {Promise<Object>} Statistics object
  */
 async function updateProfileStats() {
+    if (window.__profileSaveReason === 'notif') {
+        return {
+            totalOrders: Number(document.getElementById('ordersCount')?.textContent || 0),
+            points: Number(document.getElementById('pointsCount')?.textContent || 0),
+            memberTier: document.getElementById('memberTier')?.textContent || 'Bronze',
+            totalSpent: 0
+        };
+    }
     const stats = await calculateProfileStats();
     
     const ordersCountEl = document.getElementById('ordersCount');
@@ -726,9 +745,26 @@ async function displayRecentOrders(limit) {
             itemsSummary = order.items || '';
         }
 
-        const dateDisplay = order.dateDisplay || 
-                           (order.date ? new Date(order.date).toLocaleString() : 
-                           (order.orderDate ? new Date(order.orderDate).toLocaleString() : ''));
+        const orderDateSource = order.createdAt || order.date || order.orderDate || order.dateDisplay || '';
+        const dateDisplay = formatOrderDate(orderDateSource);
+        
+        function formatOrderDate(dateStr) {
+            const d = dateStr ? new Date(dateStr) : null;
+            if (!d || isNaN(d.getTime())) return '';
+            const parts = new Intl.DateTimeFormat('en-GB', {
+                timeZone: 'Asia/Kolkata',
+                day: '2-digit',
+                month: 'short',
+                year: 'numeric',
+                hour: 'numeric',
+                minute: '2-digit',
+                hour12: true
+            }).formatToParts(d);
+            const map = {};
+            parts.forEach(p => { map[p.type] = p.value; });
+            const dayPeriod = (map.dayPeriod || '').toLowerCase();
+            return `${map.day} ${map.month} ${map.year}, ${map.hour}:${map.minute} ${dayPeriod}`.trim();
+        }
         
         const totalAmount = (typeof order.total === 'number') ? order.total : 
                            (typeof order.totalAmount === 'number') ? order.totalAmount : 
@@ -829,7 +865,15 @@ async function addNewOrder(orderData, options = {}) {
     // Normalize date fields
     newOrder.orderDate = orderData.orderDate || orderData.date || new Date().toISOString();
     newOrder.date = newOrder.date || newOrder.orderDate;
-    newOrder.dateDisplay = orderData.dateDisplay || new Date(newOrder.date).toLocaleString();
+    newOrder.dateDisplay = orderData.dateDisplay || new Intl.DateTimeFormat('en-IN', {
+        timeZone: 'Asia/Kolkata',
+        day: '2-digit',
+        month: 'short',
+        year: 'numeric',
+        hour: 'numeric',
+        minute: '2-digit',
+        hour12: true
+    }).format(new Date(newOrder.date));
 
     // Preserve items as array when provided
     if (Array.isArray(orderData.items)) {
@@ -1915,15 +1959,15 @@ function showCancelOrderModal(orderId, displayLimit) {
         try {
             if (window.ordersManager && typeof window.ordersManager.cancelOrder === 'function') {
                 const res = await window.ordersManager.cancelOrder(orderId, 'Cancelled by user from Profile');
-                if (res && res.success) {
-                    closeModal('cancelOrderModal');
+                closeModal('cancelOrderModal');
+                // Only show ONE popup based on success status
+                if (res && res.success === true) {
                     showToast('Order cancelled successfully', 'success');
                     displayRecentOrders(displayLimit);
                     // FIX ISSUE 3: Explicitly update stats after cancel
                     updateProfileStats();
                     window.dispatchEvent(new CustomEvent('ordersUpdated', { detail: res.order }));
                 } else {
-                    closeModal('cancelOrderModal');
                     showToast(res && res.message ? res.message : 'Unable to cancel order', 'error');
                 }
             } else {
@@ -2136,34 +2180,52 @@ function setupEventListeners() {
  * Setup notification toggle handlers
  */
 function setupNotificationToggles() {
-    const emailNotifEl = document.getElementById('emailNotif');
-    const smsNotifEl = document.getElementById('smsNotif');
-    
-    if (emailNotifEl) {
-        emailNotifEl.addEventListener('change', function() {
-            const prefs = { 
-                emailNotif: !!emailNotifEl.checked, 
-                smsNotif: !!(smsNotifEl && smsNotifEl.checked) 
-            };
-            saveNotificationPreferences(prefs);
-            saveUserProfile(userProfileData || initializeUserProfile());
-            showToast(`Email notifications ${prefs.emailNotif ? 'enabled' : 'disabled'}`, 
-                     prefs.emailNotif ? 'success' : 'info');
-        });
-    }
-    
-    if (smsNotifEl) {
-        smsNotifEl.addEventListener('change', function() {
-            const prefs = { 
-                emailNotif: !!(emailNotifEl && emailNotifEl.checked), 
-                smsNotif: !!smsNotifEl.checked 
-            };
-            saveNotificationPreferences(prefs);
-            saveUserProfile(userProfileData || initializeUserProfile());
-            showToast(`SMS notifications ${prefs.smsNotif ? 'enabled' : 'disabled'}`, 
-                     prefs.smsNotif ? 'success' : 'info');
-        });
-    }
+    // Use setTimeout to ensure DOM is ready
+    setTimeout(() => {
+        const emailNotifEl = document.getElementById('emailNotif');
+        const smsNotifEl = document.getElementById('smsNotif');
+        
+        if (emailNotifEl) {
+            emailNotifEl.addEventListener('change', function() {
+                const prefs = { 
+                    emailNotif: !!emailNotifEl.checked, 
+                    smsNotif: !!(smsNotifEl && smsNotifEl.checked) 
+                };
+                saveNotificationPreferences(prefs);
+                window.__profileSaveReason = 'notif';
+                saveUserProfile(userProfileData || initializeUserProfile());
+                window.__profileSaveReason = null;
+                showToast(`Email notifications ${prefs.emailNotif ? 'enabled' : 'disabled'}`, 
+                         prefs.emailNotif ? 'success' : 'info');
+            });
+        }
+        
+        if (smsNotifEl) {
+            smsNotifEl.addEventListener('change', function(e) {
+                const prefs = { 
+                    emailNotif: !!(emailNotifEl && emailNotifEl.checked), 
+                    smsNotif: !!smsNotifEl.checked 
+                };
+                // If user tries to enable SMS, show notification instead of calling backend
+                if (smsNotifEl.checked) {
+                    showToast('SMS notification feature coming soon', 'info');
+                    // Uncheck the SMS checkbox immediately to prevent confusion
+                    e.preventDefault();
+                    smsNotifEl.checked = false;
+                    prefs.smsNotif = false;
+                    // Don't save preferences that enable SMS
+                    return;
+                }
+                saveNotificationPreferences(prefs);
+                window.__profileSaveReason = 'notif';
+                saveUserProfile(userProfileData || initializeUserProfile());
+                window.__profileSaveReason = null;
+                if (!smsNotifEl.checked) {
+                    showToast('SMS notifications disabled', 'info');
+                }
+            });
+        }
+    }, 100);
 }
 
 /**

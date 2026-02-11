@@ -2716,12 +2716,23 @@
                 };
 
                 // Store in localStorage
-                let feedbacks = JSON.parse(localStorage.getItem('customerFeedbacks') || '[]');
+                const storedFeedbacks = JSON.parse(localStorage.getItem('customerFeedbacks') || '[]');
+                let feedbacks = Array.isArray(storedFeedbacks)
+                    ? storedFeedbacks
+                    : (Array.isArray(storedFeedbacks?.feedbacks)
+                        ? storedFeedbacks.feedbacks
+                        : (Array.isArray(storedFeedbacks?.feedback) ? storedFeedbacks.feedback : []));
                 feedbacks.push(formData);
                 localStorage.setItem('customerFeedbacks', JSON.stringify(feedbacks));
 
-                // Update feedback cards
-                updateFeedbackCards();
+                // Re-fetch all feedback and re-render from latest filtered data
+                const refetched = JSON.parse(localStorage.getItem('customerFeedbacks') || '[]');
+                feedbacks = Array.isArray(refetched)
+                    ? refetched
+                    : (Array.isArray(refetched?.feedbacks)
+                        ? refetched.feedbacks
+                        : (Array.isArray(refetched?.feedback) ? refetched.feedback : []));
+                updateFeedbackCards(feedbacks);
 
                 // Show success message
                 document.getElementById('feedbackForm').style.display = 'none';
@@ -2756,152 +2767,93 @@
 
         // Update Testimonials Section with 4+ star ratings (Queue Structure - FIFO)
         const renderedFeedbackKeys = new Set();
-        function updateFeedbackCards() {
-            const feedbacks = JSON.parse(localStorage.getItem('customerFeedbacks') || '[]');
-            
-            // Queue: newest 4+ appears first, older shift down (max 3)
-            const topFeedbacks = feedbacks
+        function updateFeedbackCards(feedbackList) {
+            const normalizeFeedbackArray = (input) => {
+                if (Array.isArray(input)) return input;
+                if (input && Array.isArray(input.feedbacks)) return input.feedbacks;
+                if (input && Array.isArray(input.feedback)) return input.feedback;
+                return [];
+            };
+
+            const storedPrimary = JSON.parse(localStorage.getItem('customerFeedbacks') || '[]');
+            const storedLegacy = JSON.parse(localStorage.getItem('feedbacks') || '[]');
+            const sourceFeedbacks = Array.isArray(feedbackList)
+                ? feedbackList
+                : [...normalizeFeedbackArray(storedPrimary), ...normalizeFeedbackArray(storedLegacy)];
+
+            const feedbacks = sourceFeedbacks
+                .filter(f => f && typeof f === 'object')
+                .map(f => ({
+                    ...f,
+                    rating: f.rating ?? f.stars ?? f.overall_rating ?? f.score ?? 0,
+                    message: f.message ?? f.feedback ?? f.comment ?? '',
+                    name: f.name ?? f.user_name ?? f.username ?? f.customerName ?? 'Customer',
+                    category: f.category ?? f.type ?? f.feedbackCategory ?? 'Customer',
+                    timestamp: f.timestamp || f.created_at || f.createdAt || f.date || f.submitted_at || ''
+                }));
+
+            const filtered = feedbacks
                 .filter(f => Number(f.rating) >= 4)
-                .sort((a, b) => new Date(b.timestamp) - new Date(a.timestamp))
+                .sort((a, b) => {
+                    const bTime = new Date(b.timestamp).getTime() || 0;
+                    const aTime = new Date(a.timestamp).getTime() || 0;
+                    return bTime - aTime;
+                })
                 .slice(0, 3);
 
             const container = document.getElementById('testimonialsContainer');
-            
-            if (topFeedbacks.length === 0) {
-                // Show default testimonials if no feedback yet
-                if (container.querySelectorAll('[data-feedback-key]').length === 0) {
-                    container.innerHTML = `
-                    <div class="col-lg-4 col-md-6">
-                        <div class="testimonial-card animate-in">
-                            <div class="stars" align="center">
-                                <i class="fas fa-star"></i>
-                                <i class="fas fa-star"></i>
-                                <i class="fas fa-star"></i>
-                                <i class="fas fa-star"></i>
-                                <i class="fas fa-star"></i>
-                            </div>
-                            <p class="testimonial-text">"The best coffee I've ever had! The atmosphere is cozy and the staff is incredibly friendly. Highly recommend the Espresso Bliss!"</p>
-                            <div class="testimonial-author">
-                                <strong>Anjali Sharma</strong>
-                                <span>Regular Customer</span>
-                            </div>
-                        </div>
-                    </div>
-                    <div class="col-lg-4 col-md-6">
-                        <div class="testimonial-card animate-in">
-                            <div class="stars" align="center">
-                                <i class="fas fa-star"></i>
-                                <i class="fas fa-star"></i>
-                                <i class="fas fa-star"></i>
-                                <i class="fas fa-star"></i>
-                                <i class="far fa-star"></i>
-                            </div>
-                            <p class="testimonial-text">"CoffeeKaafiHai has become my go-to spot for meetings and relaxation. The Mocha Magic is absolutely divine!"</p>
-                            <div class="testimonial-author">
-                                <strong>Sameer Mehta</strong>
-                                <span>Coffee Enthusiast</span>
-                            </div>
-                        </div>
-                    </div>
-                    <div class="col-lg-4 col-md-6">
-                        <div class="testimonial-card animate-in">
-                            <div class="stars" align="center">
-                                <i class="fas fa-star"></i>
-                                <i class="fas fa-star"></i>
-                                <i class="fas fa-star"></i>
-                                <i class="fas fa-star"></i>
-                                <i class="fas fa-star-half-alt"></i>
-                            </div>
-                            <p class="testimonial-text">"A hidden gem in Pune! Every visit feels special. The Cold Brew Creations are perfect for hot summer days."</p>
-                            <div class="testimonial-author">
-                                <strong>Ritika Patel</strong>
-                                <span>Local Resident</span>
-                            </div>
-                        </div>
-                    </div>
-                `;
-                }
-                return;
-            }
-
-            const getFeedbackKey = (feedback) => `${feedback.timestamp || ''}::${feedback.name || ''}::${feedback.message || ''}`;
             const FEEDBACK_PREVIEW_LIMIT = 160;
-            const desiredKeys = topFeedbacks.map(getFeedbackKey);
+            container.innerHTML = "";
 
-            // Remove default testimonials once real feedback exists
-            Array.from(container.children).forEach(child => {
-                if (!child.dataset || !child.dataset.feedbackKey) {
-                    child.remove();
-                }
-            });
-
-            // Remove cards not in the latest top 3
-            const existing = new Map();
-            Array.from(container.children).forEach(child => {
-                const key = child.dataset ? child.dataset.feedbackKey : '';
-                if (!desiredKeys.includes(key)) {
-                    child.remove();
-                } else {
-                    existing.set(key, child);
-                }
-            });
-
-            // Ensure only top 3 are shown, most recent first
-            topFeedbacks.forEach(feedback => {
-                const key = getFeedbackKey(feedback);
-                let col = existing.get(key);
-                if (!col) {
-                // Generate star HTML with half-star support
+            const cardsHtml = filtered.map(feedback => {
                 let starsHtml = '';
                 const rating = Number(feedback.rating);
                 const fullRating = Math.floor(rating);
                 const hasHalf = rating % 1 !== 0;
-                
+
                 for (let i = 0; i < fullRating; i++) {
                     starsHtml += '<i class="fas fa-star"></i>';
                 }
                 if (hasHalf) {
                     starsHtml += '<i class="fas fa-star-half-alt"></i>';
                 }
-                
-                    col = document.createElement('div');
-                    col.className = 'col-lg-4 col-md-6';
-                    col.dataset.feedbackKey = key;
-                    col.innerHTML = `
-                    <div class="testimonial-card animate-in">
-                        <div class="stars" align="center">
-                            ${starsHtml}
-                        </div>
-                        <p class="testimonial-text">"${escapeHtml(feedback.message)}"</p>
-                        <div class="testimonial-author">
-                            <strong>${escapeHtml(feedback.name)}</strong>
-                            <span>${escapeHtml(feedback.category)}</span>
+
+                const safeMessage = String(feedback.message || '');
+                const fullText = `"${safeMessage}"`;
+                const previewText = fullText.length > FEEDBACK_PREVIEW_LIMIT
+                    ? `${fullText.slice(0, FEEDBACK_PREVIEW_LIMIT).trimEnd()}...more`
+                    : fullText;
+                const escapedPreview = escapeHtml(previewText);
+                const escapedFull = escapeHtml(fullText);
+
+                return `
+                    <div class="col-lg-4 col-md-6" data-feedback-key="${escapeHtml(`${feedback.timestamp || ''}::${feedback.name || ''}::${feedback.message || ''}`)}">
+                        <div class="testimonial-card animate-in">
+                            <div class="stars" align="center">
+                                ${starsHtml}
+                            </div>
+                            <p class="testimonial-text" data-truncated="${fullText.length > FEEDBACK_PREVIEW_LIMIT ? '1' : '0'}" data-full-text="${escapedFull}">${escapedPreview}</p>
+                            <div class="testimonial-author">
+                                <strong>${escapeHtml(String(feedback.name || ''))}</strong>
+                                <span>${escapeHtml(String(feedback.category || ''))}</span>
+                            </div>
                         </div>
                     </div>
                 `;
-                    const textEl = col.querySelector('.testimonial-text');
-                    if (textEl) {
-                        const fullText = `"${feedback.message}"`;
-                        if (fullText.length > FEEDBACK_PREVIEW_LIMIT) {
-                            const truncated = fullText.slice(0, FEEDBACK_PREVIEW_LIMIT).trimEnd();
-                            textEl.textContent = `${truncated}…more`;
-                            textEl.dataset.fullText = fullText;
-                            textEl.dataset.truncated = '1';
-                            textEl.addEventListener('click', function () {
-                                if (this.dataset.truncated !== '1') return;
-                                this.textContent = this.dataset.fullText;
-                                this.dataset.truncated = '0';
-                            }, { once: true });
-                        } else {
-                            textEl.textContent = fullText;
-                        }
-                    }
-                }
-                container.appendChild(col);
+            }).join('');
+
+            container.innerHTML = cardsHtml;
+
+            container.querySelectorAll('.testimonial-text[data-truncated=\"1\"]').forEach(textEl => {
+                textEl.addEventListener('click', function () {
+                    if (this.dataset.truncated !== '1') return;
+                    this.textContent = this.dataset.fullText || this.textContent;
+                    this.dataset.truncated = '0';
+                }, { once: true });
             });
 
             renderedFeedbackKeys.clear();
-            desiredKeys.forEach(key => renderedFeedbackKeys.add(key));
+            filtered.forEach(f => renderedFeedbackKeys.add(`${f.timestamp || ''}::${f.name || ''}::${f.message || ''}`));
             syncTestimonialCardSizes();
         }
 
@@ -2965,3 +2917,4 @@
 </html>
 
  
+

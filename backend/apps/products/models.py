@@ -104,6 +104,45 @@ class UserActivity(models.Model):
     created_at = models.DateTimeField(auto_now_add=True, db_index=True)
 
 
+class Notification(models.Model):
+    """Notification outbox for email/mobile delivery with per-user preferences."""
+    CHANNEL_CHOICES = (
+        ('email', 'Email'),
+        ('mobile', 'Mobile'),
+    )
+    CATEGORY_CHOICES = (
+        ('order', 'Order'),
+        ('offer', 'Offer'),
+        ('announcement', 'Announcement'),
+    )
+    STATUS_CHOICES = (
+        ('queued', 'Queued'),
+        ('sent', 'Sent'),
+        ('skipped', 'Skipped'),
+        ('failed', 'Failed'),
+    )
+    user = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        on_delete=models.SET_NULL,
+        related_name='notifications',
+        null=True,
+        blank=True
+    )
+    email = models.EmailField(db_index=True)
+    phone = models.CharField(max_length=32, blank=True, default='')
+    channel = models.CharField(max_length=16, choices=CHANNEL_CHOICES, db_index=True)
+    category = models.CharField(max_length=32, choices=CATEGORY_CHOICES, db_index=True)
+    event = models.CharField(max_length=64, db_index=True)
+    title = models.CharField(max_length=200, blank=True, default='')
+    message = models.TextField(blank=True, default='')
+    payload = models.JSONField(blank=True, default=dict)
+    status = models.CharField(max_length=16, choices=STATUS_CHOICES, default='queued', db_index=True)
+    status_reason = models.CharField(max_length=200, blank=True, default='')
+    created_at = models.DateTimeField(auto_now_add=True, db_index=True)
+    sent_at = models.DateTimeField(null=True, blank=True, db_index=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+
 class PasswordResetOTP(models.Model):
     """One-time password for Django User password reset."""
     user = models.ForeignKey(

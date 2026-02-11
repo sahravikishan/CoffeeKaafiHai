@@ -7,6 +7,8 @@ from django.http import JsonResponse
 from django.views.decorators.http import require_http_methods
 from django.views.decorators.csrf import csrf_exempt
 from django.contrib.auth import get_user_model, login as django_login
+from django.core.mail import EmailMultiAlternatives
+from django.conf import settings
 from django.db import transaction
 from django.db.models import Sum
 from django.contrib.auth.decorators import login_required, user_passes_test
@@ -16,9 +18,12 @@ import random
 from decimal import Decimal
 from database.models import User, OTP, Order as MongoOrder, Payment as MongoPayment  # fetch reads from MongoDB on each request
 from database.mongo import get_database
-from .models import Order as OrderModel, Payment as PaymentModel, UserProfile, UserActivity, Feedback
+from .models import Order as OrderModel, Payment as PaymentModel, UserProfile, UserActivity, Feedback, Notification
 from .forms import OrderForm
+from .notifications import notify_order_event, notify_offer, notify_announcement
+from .email_templates import render_email_template, BRAND_NAME
 import bcrypt
+import traceback
 
 
 # ==========================================
@@ -644,10 +649,29 @@ def profile(request):
             mongo_orders = MongoOrder.get_by_email(email)  # fetch orders from MongoDB per request
             last_order = mongo_orders[0] if mongo_orders else None  # use latest Mongo order snapshot
             last_order_at = last_order.get('createdAt') if last_order else None  # pull persisted timestamp
-            last_order_at_value = last_order_at.isoformat() if hasattr(last_order_at, 'isoformat') else last_order_at  # normalize datetime for JSON
             last_order_items = last_order.get('items') if last_order else []  # pull persisted items list
             member_since = mongo_user.get('createdAt') or mongo_user.get('created_at')  # use Mongo user creation timestamp
-            member_since_value = member_since.isoformat() if hasattr(member_since, 'isoformat') else member_since  # normalize datetime for JSON
+            
+            # Format member_since date as DD Mon YYYY, h:mm am/pm (platform-independent)
+            def format_datetime(dt):
+                if not dt or not hasattr(dt, 'strftime'):
+                    return dt
+                formatted = dt.strftime("%d %b %Y, %I:%M %p")
+                # Remove leading zero from hour (e.g., "08:33 pm" -> "8:33 pm")
+                hour_day_split = formatted.split(', ')
+                if len(hour_day_split) == 2:
+                    day_month_year = hour_day_split[0]
+                    time_period = hour_day_split[1]
+                    # Remove leading zero from hour
+                    time_parts = time_period.split(':')
+                    if len(time_parts) == 2:
+                        hour = str(int(time_parts[0]))  # Convert to int and back to remove leading zero
+                        minute_period = time_parts[1]
+                        formatted = f"{day_month_year}, {hour}:{minute_period}"
+                return formatted.lower()
+            
+            member_since_value = format_datetime(member_since) if member_since else None
+            last_order_at_value = format_datetime(last_order_at) if last_order_at else None
 
             # Compute loyalty stats from MongoDB orders (read-only)
             stats = _compute_loyalty_stats(email)  # read fresh stats from MongoDB orders
@@ -1011,13 +1035,19 @@ def create_order(request):
         except Exception as e:
             print(f"Activity log failed for {profile_email}: {e}")
 
+        # Notifications: order placed (user-controlled preferences enforced server-side)
+        try:
+            notify_order_event(profile_email, 'order_placed', order=order, status=status)
+        except Exception as e:
+            print(f"Order notification failed for {profile_email}: {e}")
+
         return JsonResponse({
             'success': True,
             'razorpay_order_id': razorpay_order_id,
             'amount': amount,
             'currency': currency,
             'order': {
-                'orderId': str(order.id),
+                'orderId': extra_fields.get('clientOrderId') or str(order.id),
                 'clientOrderId': extra_fields.get('clientOrderId'),
                 'email': profile_email,
                 'items': items,
@@ -1077,6 +1107,12 @@ def verify_payment(request):
 
             if payment.order_id:
                 OrderModel.objects.filter(id=payment.order_id).update(status='paid', updated_at=datetime.now())
+                try:
+                    paid_order = OrderModel.objects.filter(id=payment.order_id).first()
+                    if email:
+                        notify_order_event(email, 'order_status_update', order=paid_order, status='paid')
+                except Exception as e:
+                    print(f"Order status notification failed for {email}: {e}")
 
             # HARD BLOCK: Payment verification updates ONLY payment/order records, NEVER profile
             # Profile data is immutable from payment/checkout flows (one-way: profile → checkout only)
@@ -1162,6 +1198,10 @@ def process_payment(request):
         # Update order status (NEVER profile)
         if order_obj:
             OrderModel.objects.filter(id=order_obj.id).update(status='processing', updated_at=datetime.now())
+            try:
+                notify_order_event(email, 'order_status_update', order=order_obj, status='processing')
+            except Exception as e:
+                print(f"Order status notification failed for {email}: {e}")
 
         # Persistence: update profile with latest stats after payment processing (CRITICAL FIX)
         # When payment is processed, ensure profile reflects updated order statistics
@@ -1214,67 +1254,145 @@ def get_orders(request):
     Session-auth only.
     """
     try:
-        if request.method == "POST":
-            data = json.loads(request.body or '{}')
-            email = request.user.email or request.user.username
-            order_id = data.get('orderId') or data.get('id')
-            client_order_id = data.get('clientOrderId')
-            reason = data.get('reason', '').strip()
-
-            if not email:
-                return JsonResponse({'success': False, 'message': 'Email is required'}, status=400)
-
-            # Resolve order by ID or clientOrderId
-            order = None
-            if order_id:
-                order = OrderModel.objects.filter(email=email, id=order_id).first()
-            if not order and client_order_id:
-                for candidate in OrderModel.objects.filter(email=email).order_by('-created_at')[:200]:
-                    extra = candidate.extra_fields or {}
-                    if extra.get('clientOrderId') == client_order_id:
-                        order = candidate
-                        break
-
-            if not order:
-                return JsonResponse({'success': False, 'message': 'Order not found'}, status=404)
-
-            if order.status in ('delivered', 'cancelled'):
-                return JsonResponse({'success': False, 'message': f'Cannot cancel {order.status} order'}, status=400)
-
-            # Persist cancellation
-            order.status = 'cancelled'
-            extra_fields = order.extra_fields or {}
-            extra_fields['cancellationReason'] = reason
-            extra_fields['cancelledAt'] = datetime.now().isoformat()
-            order.extra_fields = extra_fields
-            order.save(update_fields=['status', 'extra_fields', 'updated_at'])
-
-            return JsonResponse({
-                'success': True,
-                'message': 'Order cancelled successfully',
-                'order': {
-                    'orderId': str(order.id),
-                    'clientOrderId': extra_fields.get('clientOrderId'),
-                    'status': order.status,
-                    'cancellationReason': reason,
-                    'cancelledAt': extra_fields.get('cancelledAt')
-                }
-            })
-
         email = request.user.email or request.user.username
-        
+
         if not email:
             return JsonResponse({
                 'success': False,
                 'message': 'Email is required'
             }, status=400)
 
+        # Early POST body parse to allow cancel-only payloads to be handled
+        data = {}
+        if request.method == "POST":
+            try:
+                data = json.loads(request.body or '{}')
+            except json.JSONDecodeError:
+                return JsonResponse({'success': False, 'message': 'Invalid JSON'}, status=400)
+
+            # Detect cancel request immediately, before any other logic
+            order_id = data.get('orderId') or data.get('id')
+            client_order_id = data.get('clientOrderId')
+            cancel_request = (
+                (order_id or client_order_id)
+                and (
+                    data.get('action') == 'cancel'
+                    or data.get('status') in ('cancelled', 'canceled', 'cancel')
+                    or data.get('cancel') is True
+                    or 'reason' in data
+                )
+            )
+
+            if cancel_request:
+                # Resolve order by ID first (do not require profile/email to allow minimal cancel payloads)
+                order = None
+                if order_id and str(order_id).isdigit():
+                    order = OrderModel.objects.filter(id=int(order_id)).first()
+                    # If order exists but not owned by this user, still allow status-only change
+
+                resolved_client_order_id = client_order_id or (str(order_id) if order_id else None)
+                if not order and resolved_client_order_id:
+                    for candidate in OrderModel.objects.order_by('-created_at')[:200]:
+                        extra = candidate.extra_fields or {}
+                        if isinstance(extra, str):
+                            try:
+                                extra = json.loads(extra)
+                            except (json.JSONDecodeError, TypeError):
+                                extra = {}
+                        if not isinstance(extra, dict):
+                            extra = {}
+                        if extra.get('clientOrderId') == resolved_client_order_id:
+                            order = candidate
+                            break
+
+                if not order:
+                    return JsonResponse({'success': False, 'message': 'Order not found'}, status=404)
+
+                if order.status in ('delivered', 'cancelled'):
+                    return JsonResponse({'success': False, 'message': f'Cannot cancel {order.status} order'}, status=400)
+
+                # Persist cancellation (status only) and return minimal JSON as required
+                order.status = 'cancelled'
+                order.save(update_fields=['status', 'updated_at'])
+
+                # Send cancellation email after successful status update; never break API flow on email failure.
+                try:
+                    order_extra = order.extra_fields or {}
+                    if isinstance(order_extra, str):
+                        try:
+                            order_extra = json.loads(order_extra)
+                        except (json.JSONDecodeError, TypeError):
+                            order_extra = {}
+                    if not isinstance(order_extra, dict):
+                        order_extra = {}
+
+                    email_order_id = order_extra.get('clientOrderId') or str(order.id)
+                    user_name = (
+                        (request.user.get_full_name() or '').strip()
+                        or order_extra.get('customerName')
+                        or order.customer_name
+                        or 'Customer'
+                    )
+                    text_message = (
+                        f"Hello {user_name},\n\n"
+                        "Your order has been cancelled successfully.\n"
+                        f"Order ID: {email_order_id}\n"
+                        "Status: Cancelled\n\n"
+                        f"Thank you for choosing {BRAND_NAME}."
+                    )
+                    html_message = render_email_template(
+                        title='Order Cancelled',
+                        message=f"Hello {user_name}, your order has been cancelled successfully.",
+                        header_subtitle='Account Notification',
+                        meta_lines=[
+                            f"Order ID: {email_order_id}",
+                            "Status: Cancelled",
+                        ],
+                        footer_note=f'Thank you for choosing {BRAND_NAME}.',
+                    )
+
+                    email_msg = EmailMultiAlternatives(
+                        subject=f'Order Cancelled - {BRAND_NAME}',
+                        body=text_message,
+                        from_email=(
+                            f"{BRAND_NAME} <{(getattr(settings, 'DEFAULT_FROM_EMAIL', None) or getattr(settings, 'EMAIL_HOST_USER', None))}>"
+                            if (getattr(settings, 'DEFAULT_FROM_EMAIL', None) or getattr(settings, 'EMAIL_HOST_USER', None))
+                            else None
+                        ),
+                        to=[email],
+                    )
+                    email_msg.attach_alternative(html_message, "text/html")
+                    email_msg.send(fail_silently=False)
+                except Exception as e:
+                    print(f"Order cancellation email failed for {email}: {e}")
+
+                # Use clientOrderId if available, fallback to database id
+                order_extra = order.extra_fields or {}
+                if isinstance(order_extra, str):
+                    try:
+                        order_extra = json.loads(order_extra)
+                    except (json.JSONDecodeError, TypeError):
+                        order_extra = {}
+                if not isinstance(order_extra, dict):
+                    order_extra = {}
+                display_order_id = order_extra.get('clientOrderId') or str(order.id)
+                
+                return JsonResponse({
+                    'success': True,
+                    'message': 'Order cancelled successfully',
+                    'orderId': display_order_id,
+                    'status': order.status
+                })
+
+            if not order_id and not client_order_id:
+                return JsonResponse({'success': False, 'message': 'Order ID is required'}, status=400)
+
         # Persistence: migrate legacy orders if needed
         _backfill_orders_from_mongo(email)
 
         # Persistence: fetch orders from Django DB (source of truth for checkout)
         orders = OrderModel.objects.filter(email=email).order_by('-created_at')
-        
+
         # Normalize fields for frontend
         orders_data = []
         for order in orders:
@@ -1282,9 +1400,11 @@ def get_orders(request):
             created_at_value = order.created_at.isoformat() if order.created_at else None
             updated_at_value = order.updated_at.isoformat() if order.updated_at else None
             total_amount = float(Decimal(str(order.total_amount or 0)))
+            # Use clientOrderId if available, fallback to database id
+            display_order_id = extra.get('clientOrderId') or str(order.id)
             order_dict = {
                 '_id': str(order.id) if order.id is not None else None,
-                'orderId': str(order.id) if order.id is not None else None,
+                'orderId': display_order_id,
                 'clientOrderId': extra.get('clientOrderId'),
                 'email': order.email,
                 'orderName': order.order_name or extra.get('orderName') or '',
@@ -1308,20 +1428,39 @@ def get_orders(request):
             if 'date' not in order_dict:
                 order_dict['date'] = order_dict.get('orderDate') or order_dict.get('createdAt')
             if 'dateDisplay' not in order_dict and order_dict.get('createdAt'):
-                order_dict['dateDisplay'] = order_dict.get('createdAt')
+                # Format createdAt date to DD Mon YYYY, h:mm am/pm
+                created_dt = order.created_at
+                if created_dt and hasattr(created_dt, 'strftime'):
+                    formatted_date = created_dt.strftime("%d %b %Y, %I:%M %p")
+                    # Remove leading zero from hour
+                    hour_day_split = formatted_date.split(', ')
+                    if len(hour_day_split) == 2:
+                        day_month_year = hour_day_split[0]
+                        time_period = hour_day_split[1]
+                        time_parts = time_period.split(':')
+                        if len(time_parts) == 2:
+                            hour = str(int(time_parts[0]))
+                            minute_period = time_parts[1]
+                            formatted_date = f"{day_month_year}, {hour}:{minute_period}"
+                    order_dict['dateDisplay'] = formatted_date.lower()
+                else:
+                    order_dict['dateDisplay'] = order_dict.get('createdAt')
             orders_data.append(order_dict)
-        
+
         return JsonResponse({
             'success': True,
             'orders': orders_data,
             'total': len(orders_data)
         })
-        
+
     except Exception as e:
+        print("\n🔥 ERROR IN get_orders():")
+        traceback.print_exc()
         return JsonResponse({
-            'success': False,
-            'message': str(e)
+            "success": False,
+            "message": str(e)
         }, status=500)
+
 
 
 @csrf_exempt
@@ -1374,6 +1513,101 @@ def get_payments(request):
             'success': False,
             'message': str(e)
         }, status=500)
+
+
+# ==========================================
+# NOTIFICATIONS
+# ==========================================
+
+@csrf_exempt
+@login_required(login_url='/login/')
+@require_http_methods(["GET"])
+def notifications_list(request):
+    """Return recent notifications for the authenticated user."""
+    try:
+        email = request.user.email or request.user.username
+        if not email:
+            return JsonResponse({'success': False, 'message': 'Email is required'}, status=400)
+
+        qs = Notification.objects.filter(email=email).order_by('-created_at')[:50]
+        items = []
+        for n in qs:
+            items.append({
+                'id': n.id,
+                'channel': n.channel,
+                'category': n.category,
+                'event': n.event,
+                'title': n.title,
+                'message': n.message,
+                'status': n.status,
+                'statusReason': n.status_reason,
+                'createdAt': n.created_at.isoformat() if n.created_at else None,
+                'sentAt': n.sent_at.isoformat() if n.sent_at else None,
+            })
+
+        return JsonResponse({'success': True, 'notifications': items, 'total': len(items)})
+    except Exception as e:
+        return JsonResponse({'success': False, 'message': str(e)}, status=500)
+
+
+@csrf_exempt
+@login_required(login_url='/login/')
+@user_passes_test(lambda u: u.is_staff or u.is_superuser)
+@require_http_methods(["POST"])
+def broadcast_notification(request):
+    """
+    Admin-only broadcast for offers and announcements.
+    POST body: {
+      "category": "offer" | "announcement",
+      "title": "...",
+      "message": "...",
+      "audience": "all" | "emails",
+      "emails": ["a@b.com", ...],
+      "sendImmediately": false
+    }
+    """
+    try:
+        data = json.loads(request.body or '{}')
+        category = (data.get('category') or data.get('type') or '').strip().lower()
+        title = (data.get('title') or '').strip()
+        message = (data.get('message') or '').strip()
+        audience = (data.get('audience') or 'all').strip().lower()
+        emails = data.get('emails') or []
+        send_immediately = bool(data.get('sendImmediately', False))
+
+        if category not in ('offer', 'announcement'):
+            return JsonResponse({'success': False, 'message': 'Invalid category'}, status=400)
+        if not title or not message:
+            return JsonResponse({'success': False, 'message': 'Title and message are required'}, status=400)
+
+        if audience == 'emails':
+            if not isinstance(emails, list) or not emails:
+                return JsonResponse({'success': False, 'message': 'Emails are required for audience=emails'}, status=400)
+            target_emails = list({e.strip().lower() for e in emails if e})
+        else:
+            target_emails = list(UserProfile.objects.values_list('email', flat=True).distinct())
+
+        # Safety cap to keep request bounded.
+        max_targets = min(len(target_emails), 500)
+        target_emails = target_emails[:max_targets]
+
+        delivered = 0
+        for target in target_emails:
+            if category == 'offer':
+                notify_offer(target, title, message, send_immediately=send_immediately)
+            else:
+                notify_announcement(target, title, message, send_immediately=send_immediately)
+            delivered += 1
+
+        return JsonResponse({
+            'success': True,
+            'message': 'Broadcast queued',
+            'totalTargets': delivered
+        })
+    except json.JSONDecodeError:
+        return JsonResponse({'success': False, 'message': 'Invalid JSON'}, status=400)
+    except Exception as e:
+        return JsonResponse({'success': False, 'message': str(e)}, status=500)
 
 
 # ==========================================
@@ -1433,3 +1667,5 @@ def admin_mongo_user_detail(request, email):
         return JsonResponse({'message': 'Invalid JSON'}, status=400)
     except Exception as e:
         return JsonResponse({'message': str(e)}, status=500)
+
+
