@@ -632,6 +632,7 @@ class CheckoutManager {
             amount: total,
             subtotal: subtotal,
             tax: tax,
+            orderType: this.orderType,
             customerName: fullName,
             customerEmail: email,
             customerPhone: phone,
@@ -656,7 +657,13 @@ class CheckoutManager {
 
     handlePaymentSuccess(paymentData, orderId) {
         const order = this.createOrder(orderId, 'razorpay', 'paid', paymentData);
-        this.saveOrder(order);
+        if (paymentData && paymentData.backendOrderId) {
+            order.backendOrderId = paymentData.backendOrderId;
+        }
+        if (paymentData && paymentData.clientOrderId) {
+            order.clientOrderId = paymentData.clientOrderId;
+        }
+        this.saveOrder(order, { skipBackendPersist: true });
         cartManager.clearCart();
 
         // Success is handled by Razorpay Gateway status modal
@@ -699,11 +706,13 @@ class CheckoutManager {
         return order;
     }
 
-    saveOrder(order) {
+    saveOrder(order, options = {}) {
         try {
+            const skipBackendPersist = options.skipBackendPersist === true;
+
             // Persist to backend for profile + loyalty stats
             // Fix: Check window.authAPI.createOrder since createOrder is not global
-            if (window.authAPI && typeof window.authAPI.createOrder === 'function') {
+            if (!skipBackendPersist && window.authAPI && typeof window.authAPI.createOrder === 'function') {
                 const extra = {
                     status: (order.paymentStatus === 'paid') ? 'paid' : (order.status || 'pending'),
                     clientOrderId: order.orderId,
@@ -744,29 +753,31 @@ class CheckoutManager {
             }
 
             // Fallback: direct session-auth POST when authAPI is unavailable
-            const userEmail = localStorage.getItem('userEmail') || localStorage.getItem('currentUser') || '';
-            fetch('/api/payment/create-order/', {
-                method: 'POST',
-                headers: { 'Content-Type': 'application/json' },
-                credentials: 'same-origin',
-                body: JSON.stringify({
-                    email: userEmail,
-                    items: order.items || [],
-                    amount: order.total || 0,
-                    currency: 'INR',
-                    receipt: `order_${Date.now()}`,
-                    status: (order.paymentStatus === 'paid') ? 'paid' : (order.status || 'pending'),
-                    clientOrderId: order.orderId,
-                    orderType: order.orderType || '',
-                    deliveryAddress: order.deliveryAddress || '',
-                    paymentMethod: order.paymentMethod || '',
-                    paymentStatus: order.paymentStatus || '',
-                    subtotal: order.subtotal || 0,
-                    tax: order.tax || 0
-                })
-            }).catch((e) => {
-                console.warn('saveOrder: fallback persist failed', e);
-            });
+            if (!skipBackendPersist) {
+                const userEmail = localStorage.getItem('userEmail') || localStorage.getItem('currentUser') || '';
+                fetch('/api/payment/create-order/', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    credentials: 'same-origin',
+                    body: JSON.stringify({
+                        email: userEmail,
+                        items: order.items || [],
+                        amount: order.total || 0,
+                        currency: 'INR',
+                        receipt: `order_${Date.now()}`,
+                        status: (order.paymentStatus === 'paid') ? 'paid' : (order.status || 'pending'),
+                        clientOrderId: order.orderId,
+                        orderType: order.orderType || '',
+                        deliveryAddress: order.deliveryAddress || '',
+                        paymentMethod: order.paymentMethod || '',
+                        paymentStatus: order.paymentStatus || '',
+                        subtotal: order.subtotal || 0,
+                        tax: order.tax || 0
+                    })
+                }).catch((e) => {
+                    console.warn('saveOrder: fallback persist failed', e);
+                });
+            }
 
             if (typeof addNewOrder === 'function') {
                 addNewOrder(order, { suppressToast: true });

@@ -1,5 +1,5 @@
 from django.contrib import admin
-from django.http import JsonResponse
+from django.http import JsonResponse, HttpResponse
 from django.urls import path, include, re_path
 from django.views.static import serve
 from django.shortcuts import redirect
@@ -71,6 +71,8 @@ urlpatterns = [
     path('staff-dashboard.html', lambda req: redirect('admin_dashboard')),
     
     path('admin/', lambda req: redirect('/admin-panel/')) ,
+    # Ignore Chrome DevTools probe requests to avoid noisy 404 logs in console.
+    path('.well-known/appspecific/com.chrome.devtools.json', lambda req: HttpResponse(status=204)),
 
     # Development-only: serve frontend static files (CSS/JS/images) from the frontend folder
     # This fallback will serve files like js/, css/, images/, etc.

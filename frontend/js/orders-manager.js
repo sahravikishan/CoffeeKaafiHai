@@ -1031,19 +1031,58 @@ class OrdersManager {
     async updateOrderStatus(orderId, newStatus) {
         const order = await this.getOrderById(orderId);
         if (!order) return false;
+        const normalizedStatus = String(newStatus || '').trim().toLowerCase();
+        if (!normalizedStatus) return false;
+        const nowIso = new Date().toISOString();
 
-        order.status = newStatus;
-        order.lastUpdated = new Date().toISOString();
-        
-        // Add tracking history
-        if (!order.trackingHistory) {
-            order.trackingHistory = [];
+        const appendTracking = (statusValue, timestampValue) => {
+            if (!Array.isArray(order.trackingHistory)) {
+                order.trackingHistory = [];
+            }
+            const last = order.trackingHistory[order.trackingHistory.length - 1] || null;
+            const lastStatus = last ? String(last.status || '').toLowerCase() : '';
+            if (lastStatus !== String(statusValue || '').toLowerCase()) {
+                order.trackingHistory.push({
+                    status: statusValue,
+                    timestamp: timestampValue || nowIso
+                });
+            }
+        };
+
+        try {
+            const payload = {
+                action: 'update_status',
+                orderId: order._id || order.id || order.orderId || orderId,
+                clientOrderId: order.clientOrderId || order.orderId || null,
+                status: normalizedStatus
+            };
+            const resp = await fetch('/api/orders/', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                credentials: 'same-origin',
+                body: JSON.stringify(payload)
+            });
+            if (resp.ok) {
+                const data = await resp.json().catch(() => ({}));
+                if (data && data.success) {
+                    order.status = String(data.status || normalizedStatus).toLowerCase();
+                    order.lastUpdated = data.lastUpdated || nowIso;
+                    if (Array.isArray(data.trackingHistory) && data.trackingHistory.length) {
+                        order.trackingHistory = data.trackingHistory;
+                    } else {
+                        appendTracking(order.status, order.lastUpdated);
+                    }
+                    return true;
+                }
+            }
+        } catch (e) {
+            console.warn('updateOrderStatus: backend persist failed', e);
         }
-        order.trackingHistory.push({
-            status: newStatus,
-            timestamp: new Date().toISOString()
-        });
 
+        // Local fallback so tracking UI still progresses if backend is temporarily unavailable.
+        order.status = normalizedStatus;
+        order.lastUpdated = nowIso;
+        appendTracking(normalizedStatus, nowIso);
         return true;
     }
 
@@ -1055,6 +1094,7 @@ class OrdersManager {
     getStatusText(status) {
         const statusMap = {
             'pending': 'Order Placed',
+            'paid': 'Payment Verified',
             'confirmed': 'Confirmed',
             'preparing': 'Preparing',
             'ready': 'Ready for Pickup',
@@ -1072,6 +1112,7 @@ class OrdersManager {
     getStatusColor(status) {
         const colorMap = {
             'pending': '#FFA500',
+            'paid': '#4CAF50',
             'confirmed': '#2196F3',
             'preparing': '#9C27B0',
             'ready': '#4CAF50',
@@ -1464,7 +1505,7 @@ async function generateUserDataPDF(startDate = null, endDate = null) {
         yPos += 8;
 
         // ================= ACCOUNT STATISTICS =================
-        const stats = calculateProfileStats();
+        const stats = await calculateProfileStats();
         addSection(doc, 'Account Statistics', marginLeft, yPos);
         yPos += 10;
         

@@ -7,23 +7,29 @@ from django.http import JsonResponse
 from django.views.decorators.http import require_http_methods
 from django.views.decorators.csrf import csrf_exempt
 from django.contrib.auth import get_user_model, login as django_login
-from django.core.mail import EmailMultiAlternatives
 from django.conf import settings
 from django.db import transaction
 from django.db.models import Sum
 from django.contrib.auth.decorators import login_required, user_passes_test
+from django.utils import timezone
 import json
 from datetime import datetime, timedelta
 import random
-from decimal import Decimal
+from decimal import Decimal, ROUND_HALF_UP
 from database.models import User, OTP, Order as MongoOrder, Payment as MongoPayment  # fetch reads from MongoDB on each request
 from database.mongo import get_database
 from .models import Order as OrderModel, Payment as PaymentModel, UserProfile, UserActivity, Feedback, Notification
 from .forms import OrderForm
 from .notifications import notify_order_event, notify_offer, notify_announcement
-from .email_templates import render_email_template, BRAND_NAME
 import bcrypt
 import traceback
+
+try:
+    import razorpay
+    from razorpay.errors import SignatureVerificationError
+except Exception:
+    razorpay = None
+    SignatureVerificationError = Exception
 
 
 # ==========================================
@@ -37,6 +43,37 @@ def _get_django_user_by_email(email):
         user_model.objects.filter(email=email).first()
         or user_model.objects.filter(username=email).first()
     )
+
+
+def _normalize_extra_fields(extra):
+    """Return order extra_fields as a safe dict."""
+    payload = extra or {}
+    if isinstance(payload, str):
+        try:
+            payload = json.loads(payload)
+        except (json.JSONDecodeError, TypeError):
+            payload = {}
+    if not isinstance(payload, dict):
+        return {}
+    return payload
+
+
+def _find_order_by_client_order_id(client_order_id, email=None, limit=400):
+    """
+    Resolve an order by clientOrderId from extra_fields.
+    Kept DB-agnostic to avoid JSONField lookup differences.
+    """
+    resolved = str(client_order_id or '').strip()
+    if not resolved:
+        return None
+    qs = OrderModel.objects.order_by('-created_at')
+    if email:
+        qs = qs.filter(email=email)
+    for candidate in qs[:limit]:
+        extra = _normalize_extra_fields(candidate.extra_fields)
+        if str(extra.get('clientOrderId') or '').strip() == resolved:
+            return candidate
+    return None
 
 
 def _get_or_create_profile(email, mongo_user=None):
@@ -831,6 +868,100 @@ def profile(request):
         return JsonResponse({'success': False, 'message': str(e)}, status=500)
 
 
+@csrf_exempt
+@require_http_methods(["GET", "POST"])
+def public_feedbacks(request):
+    """
+    Public feedback endpoint.
+    GET: latest feedback filtered by minimum rating.
+    POST: create a feedback entry.
+    """
+    try:
+        if request.method == "POST":
+            if not getattr(request, 'user', None) or not request.user.is_authenticated:
+                return JsonResponse({
+                    'success': False,
+                    'message': 'Authentication required. Please log in to submit feedback.'
+                }, status=401)
+
+            try:
+                data = json.loads(request.body or "{}")
+            except json.JSONDecodeError:
+                return JsonResponse({'success': False, 'message': 'Invalid JSON'}, status=400)
+
+            raw_rating = data.get('rating')
+            try:
+                rating = Decimal(str(raw_rating))
+            except Exception:
+                rating = Decimal('0')
+            if not rating.is_finite():
+                rating = Decimal('0')
+            rating = max(Decimal('0'), min(rating, Decimal('5')))
+
+            message = str(data.get('message') or '').strip()
+            if not message:
+                return JsonResponse({'success': False, 'message': 'Feedback message is required'}, status=400)
+
+            provided_name = str(data.get('name') or '').strip()
+            derived_name = str(request.user.get_full_name() or '').strip()
+            name = provided_name or derived_name or 'Customer'
+            email = str(request.user.email or request.user.username or '').strip()
+            category = str(data.get('category') or '').strip() or 'Customer'
+
+            feedback = Feedback.objects.create(
+                user=request.user,
+                email=email,
+                name=name,
+                category=category,
+                rating=rating,
+                message=message
+            )
+
+            return JsonResponse({
+                'success': True,
+                'message': 'Feedback saved',
+                'feedback': {
+                    'name': feedback.name,
+                    'category': feedback.category,
+                    'rating': float(feedback.rating),
+                    'message': feedback.message,
+                    'created_at': feedback.created_at.isoformat() if feedback.created_at else None,
+                    'timestamp': feedback.created_at.isoformat() if feedback.created_at else None
+                }
+            })
+
+        try:
+            limit = int(request.GET.get('limit', 3))
+        except (TypeError, ValueError):
+            limit = 3
+        limit = max(1, min(limit, 20))
+
+        raw_min_rating = request.GET.get('min_rating', '4')
+        try:
+            min_rating = Decimal(str(raw_min_rating))
+        except Exception:
+            min_rating = Decimal('4')
+        if not min_rating.is_finite():
+            min_rating = Decimal('4')
+        min_rating = max(Decimal('0'), min(min_rating, Decimal('5')))
+
+        feedback_qs = Feedback.objects.filter(rating__gte=min_rating).order_by('-created_at', '-id')[:limit]
+        feedbacks = [
+            {
+                'name': f.name or 'Customer',
+                'category': f.category or 'Customer',
+                'rating': float(f.rating),
+                'message': f.message or '',
+                'created_at': f.created_at.isoformat() if f.created_at else None,
+                'timestamp': f.created_at.isoformat() if f.created_at else None
+            }
+            for f in feedback_qs
+        ]
+        return JsonResponse({'success': True, 'feedbacks': feedbacks})
+    except Exception as e:
+        return JsonResponse({'success': False, 'message': str(e), 'feedbacks': []}, status=500)
+
+
 
 # ==========================================
 # PROFILE + ORDER STATS UTILITIES
@@ -866,6 +997,14 @@ def _compute_loyalty_stats(email):
 # PAYMENT ENDPOINTS
 # ==========================================
 
+def _get_razorpay_client():
+    """Return configured Razorpay client or raise a clear error."""
+    if razorpay is None:
+        raise ValueError('Razorpay SDK is not installed on server')
+    if not settings.RAZORPAY_KEY_ID or not settings.RAZORPAY_KEY_SECRET:
+        raise ValueError('Razorpay keys are not configured')
+    return razorpay.Client(auth=(settings.RAZORPAY_KEY_ID, settings.RAZORPAY_KEY_SECRET))
+
 @csrf_exempt
 @require_http_methods(["POST"])
 def create_order(request):
@@ -881,20 +1020,32 @@ def create_order(request):
     """
     try:
         data = json.loads(request.body)
-        amount = data.get('amount')
-        currency = data.get('currency', 'INR')
-        receipt = data.get('receipt')
-        email = data.get('email')
+        amount_raw = data.get('amount')
+        currency = (data.get('currency') or 'INR').upper()
+        receipt = data.get('receipt') or f"order_{int(timezone.now().timestamp())}"
+        email = data.get('email') or request.session.get('email')
         # Use session email as the profile source of truth (checkout must not override profile owner)
         profile_email = request.session.get('email') or email
         items = data.get('items', [])
         status = data.get('status') or 'pending'
 
-        if not amount or not receipt or not email:
+        if amount_raw is None or not profile_email:
             return JsonResponse({
                 'success': False,
-                'message': 'Amount, receipt, and email are required'
+                'message': 'Amount and email are required'
             }, status=400)
+        try:
+            amount = Decimal(str(amount_raw))
+        except Exception:
+            return JsonResponse({'success': False, 'message': 'Invalid amount'}, status=400)
+        if amount <= 0:
+            return JsonResponse({'success': False, 'message': 'Amount must be greater than 0'}, status=400)
+        if currency != 'INR':
+            return JsonResponse({'success': False, 'message': 'Only INR currency is supported'}, status=400)
+        amount = amount.quantize(Decimal('0.01'), rounding=ROUND_HALF_UP)
+        amount_paise = int((amount * Decimal('100')).quantize(Decimal('1'), rounding=ROUND_HALF_UP))
+        if amount_paise <= 0:
+            return JsonResponse({'success': False, 'message': 'Invalid amount in paise'}, status=400)
 
         # Optional metadata from frontend
         extra_fields = {
@@ -906,10 +1057,20 @@ def create_order(request):
             'subtotal': data.get('subtotal'),
             'tax': data.get('tax')
         }
+        client_order_id = str(extra_fields.get('clientOrderId') or '').strip()
 
         # NOTE: Checkout must NEVER mutate request.user or request.user.profile.
         # All profile data here is read-only, used only to snapshot order fields.
         django_user = _get_django_user_by_email(profile_email)
+        existing_order = _find_order_by_client_order_id(client_order_id, email=profile_email) if client_order_id else None
+        if existing_order and existing_order.status in ('paid', 'delivered'):
+            return JsonResponse({
+                'success': False,
+                'message': 'This order is already paid. Please check order tracking.',
+                'orderId': client_order_id or str(existing_order.id)
+            }, status=409)
+
+        created_new_order = False
         with transaction.atomic():
             # One-way sync: profile -> checkout (checkout must never update profile)
             # Lock the profile row to detect any accidental writes within this checkout transaction.
@@ -927,7 +1088,7 @@ def create_order(request):
             snapshot_name = checkout_name or profile_name or ''
             snapshot_email = data.get('email') or (profile.email if profile else profile_email) or ''
             snapshot_phone = data.get('phone') or (profile.phone if profile else '')
-            
+
             # CRITICAL: Checkout address is TEMPORARY and INDEPENDENT of profile address
             # User can enter any delivery address during checkout without affecting profile
             # This is the one-way flow: profile -> checkout (read-only), NEVER checkout -> profile
@@ -947,37 +1108,78 @@ def create_order(request):
                     'address': profile.address,  # Profile address is immutable from checkout
                 }
 
-            # Checkout MUST use OrderForm only (no User/Profile forms)
-            form_data = {
-                'items': json.dumps(items or []),
-                'total_amount': str(amount),
-                'status': status,
-                'extra_fields': json.dumps(extra_fields),
-                'order_name': snapshot_name,
-                'order_email': snapshot_email,
-                'order_phone': snapshot_phone,
-                'order_address': snapshot_address,
-            }
+            if existing_order and existing_order.status != 'cancelled':
+                # Idempotency: reuse the same order row for the same clientOrderId.
+                order = existing_order
+                current_extra = _normalize_extra_fields(order.extra_fields)
+                for key, value in extra_fields.items():
+                    if value not in (None, ''):
+                        current_extra[key] = value
+                order.extra_fields = current_extra
+                order.user = order.user or django_user
+                order.email = profile_email
+                order.items = items or order.items
+                order.total_amount = amount
+                order.status = status or order.status or 'pending'
+                order.order_name = snapshot_name or order.order_name
+                order.order_email = snapshot_email or order.order_email
+                order.order_phone = snapshot_phone or order.order_phone
+                order.order_address = snapshot_address or order.order_address
+                # Legacy fields populated for backward compatibility only
+                order.customer_name = snapshot_name or order.customer_name
+                order.customer_email = snapshot_email or order.customer_email
+                order.customer_phone = snapshot_phone or order.customer_phone
+                order.customer_address = snapshot_address or order.customer_address
+                order.save(update_fields=[
+                    'user',
+                    'email',
+                    'items',
+                    'total_amount',
+                    'status',
+                    'extra_fields',
+                    'order_name',
+                    'order_email',
+                    'order_phone',
+                    'order_address',
+                    'customer_name',
+                    'customer_email',
+                    'customer_phone',
+                    'customer_address',
+                    'updated_at',
+                ])
+            else:
+                # Checkout MUST use OrderForm only (no User/Profile forms)
+                form_data = {
+                    'items': json.dumps(items or []),
+                    'total_amount': str(amount),
+                    'status': status,
+                    'extra_fields': json.dumps(extra_fields),
+                    'order_name': snapshot_name,
+                    'order_email': snapshot_email,
+                    'order_phone': snapshot_phone,
+                    'order_address': snapshot_address,
+                }
 
-            order_form = OrderForm(form_data)
-            if not order_form.is_valid():
-                return JsonResponse({'success': False, 'message': 'Invalid order data', 'errors': order_form.errors}, status=400)
+                order_form = OrderForm(form_data)
+                if not order_form.is_valid():
+                    return JsonResponse({'success': False, 'message': 'Invalid order data', 'errors': order_form.errors}, status=400)
 
-            # HARD BLOCK: Save order ONLY, NEVER profile/user
-            # Checkout data is SNAPSHOT-ONLY for this order (order_name, order_email, order_phone, order_address)
-            # These fields are SEPARATE and INDEPENDENT from UserProfile (first_name, last_name, email, phone, address)
-            # CRITICAL: order_address is temporary delivery address - it is NEVER synced back to profile.address
-            # Profile address can ONLY be modified by user manually on profile page (source='profile')
-            # Even if user changes address during checkout, profile.address remains unchanged
-            order = order_form.save(commit=False)
-            order.user = django_user
-            order.email = profile_email
-            # Legacy fields populated for backward compatibility only
-            order.customer_name = snapshot_name
-            order.customer_email = snapshot_email
-            order.customer_phone = snapshot_phone
-            order.customer_address = snapshot_address
-            order.save()
+                # HARD BLOCK: Save order ONLY, NEVER profile/user
+                # Checkout data is SNAPSHOT-ONLY for this order (order_name, order_email, order_phone, order_address)
+                # These fields are SEPARATE and INDEPENDENT from UserProfile (first_name, last_name, email, phone, address)
+                # CRITICAL: order_address is temporary delivery address - it is NEVER synced back to profile.address
+                # Profile address can ONLY be modified by user manually on profile page (source='profile')
+                # Even if user changes address during checkout, profile.address remains unchanged
+                order = order_form.save(commit=False)
+                order.user = django_user
+                order.email = profile_email
+                # Legacy fields populated for backward compatibility only
+                order.customer_name = snapshot_name
+                order.customer_email = snapshot_email
+                order.customer_phone = snapshot_phone
+                order.customer_address = snapshot_address
+                order.save()
+                created_new_order = True
 
             # FAIL-LOUD GUARD: Verify profile data was NOT modified during checkout
             # CRITICAL: profile.address must remain unchanged (user delivery address is temporary, in order_address only)
@@ -993,66 +1195,88 @@ def create_order(request):
                 } != profile_before:
                     raise Exception('Checkout attempted to modify profile data (blocked). Profile address must remain immutable from checkout.')
 
-        # TODO: Create order in Razorpay using razorpay SDK
-        razorpay_order_id = f'order_{datetime.now().timestamp()}'.replace('.', '_')
+        try:
+            # Create real Razorpay order
+            client = _get_razorpay_client()
+            razorpay_payload = {
+                'amount': amount_paise,
+                'currency': 'INR',
+                'receipt': str(receipt)[:40],
+                'notes': {
+                    'email': profile_email,
+                    'backend_order_id': str(order.id),
+                    'client_order_id': str(extra_fields.get('clientOrderId') or ''),
+                }
+            }
+            payment_capture = data.get('payment_capture')
+            if payment_capture is not None:
+                razorpay_payload['payment_capture'] = 1 if str(payment_capture).lower() in ('1', 'true', 'yes') else 0
+            razorpay_order = client.order.create(data=razorpay_payload)
+            razorpay_order_id = razorpay_order.get('id')
+            if not razorpay_order_id:
+                raise Exception('Razorpay order creation failed')
 
-        # Persistence: create payment record in DB
-        PaymentModel.objects.create(
-            user=django_user,
-            order=order,
-            email=profile_email,
-            amount=Decimal(amount),
-            razorpay_order_id=razorpay_order_id,
-            status='pending'
-        )
+            # Persistence: create payment record in DB
+            PaymentModel.objects.create(
+                user=django_user,
+                order=order,
+                email=profile_email,
+                amount=amount,
+                razorpay_order_id=razorpay_order_id,
+                status='pending'
+            )
+        except Exception:
+            # Keep DB clean only for brand-new rows; retries may reuse an existing order.
+            if created_new_order:
+                OrderModel.objects.filter(id=order.id).delete()
+            raise
 
         # NOTE: No profile/user writes are allowed in checkout flow.
         stats = None
 
-        # Persistence: update profile with order stats (CRITICAL FIX for data loss)
-        # When an order is created, profile must be updated with latest statistics
-        # so data persists across page refreshes and browser restarts
-        try:
-            profile_to_update = UserProfile.objects.filter(email=profile_email).first()
-            if profile_to_update:
-                # Compute updated stats including this new order
-                stats = _compute_loyalty_stats(profile_email)
-                # CRITICAL: Save stats to database (not just computed in memory)
-                UserProfile.objects.filter(email=profile_email).update(
-                    last_order_at=datetime.now(),
-                    last_order_items=items or [],
-                    total_orders=stats['totalOrders'],
-                    total_spent=Decimal(str(stats['totalSpent'])),
-                    loyalty_points=stats['loyaltyPoints'],
-                    member_tier=stats['memberTier']
-                )
-        except Exception as e:
-            print(f"Profile stats update failed for {profile_email}: {e}")
+        if created_new_order:
+            # Persistence: update profile with order stats (CRITICAL FIX for data loss)
+            # When an order is created, profile must be updated with latest statistics
+            # so data persists across page refreshes and browser restarts
+            try:
+                profile_to_update = UserProfile.objects.filter(email=profile_email).first()
+                if profile_to_update:
+                    # Compute updated stats including this new order
+                    stats = _compute_loyalty_stats(profile_email)
+                    # CRITICAL: Save stats to database (not just computed in memory)
+                    UserProfile.objects.filter(email=profile_email).update(
+                        last_order_at=timezone.now(),
+                        last_order_items=items or [],
+                        total_orders=stats['totalOrders'],
+                        total_spent=Decimal(str(stats['totalSpent'])),
+                        loyalty_points=stats['loyaltyPoints'],
+                        member_tier=stats['memberTier']
+                    )
+            except Exception as e:
+                print(f"Profile stats update failed for {profile_email}: {e}")
 
-        # Persistence: log order creation activity
-        try:
-            _log_activity(profile_email, 'order_created', {'orderId': str(order.id), 'status': status})
-        except Exception as e:
-            print(f"Activity log failed for {profile_email}: {e}")
-
-        # Notifications: order placed (user-controlled preferences enforced server-side)
-        try:
-            notify_order_event(profile_email, 'order_placed', order=order, status=status)
-        except Exception as e:
-            print(f"Order notification failed for {profile_email}: {e}")
+            # Persistence: log order creation activity
+            try:
+                _log_activity(profile_email, 'order_created', {'orderId': str(order.id), 'status': status})
+            except Exception as e:
+                print(f"Activity log failed for {profile_email}: {e}")
 
         return JsonResponse({
             'success': True,
             'razorpay_order_id': razorpay_order_id,
+            'razorpay_key_id': settings.RAZORPAY_KEY_ID,
             'amount': amount,
+            'amount_paise': amount_paise,
             'currency': currency,
+            'backend_order_id': str(order.id),
+            'client_order_id': extra_fields.get('clientOrderId'),
             'order': {
                 'orderId': extra_fields.get('clientOrderId') or str(order.id),
                 'clientOrderId': extra_fields.get('clientOrderId'),
                 'email': profile_email,
                 'items': items,
                 'totalAmount': amount,
-                'status': status
+                'status': order.status
             },
             'stats': stats
         })
@@ -1074,7 +1298,7 @@ def create_order(request):
 def verify_payment(request):
     """
     Verify payment signature from Razorpay.
-    Expected request body: { 
+    Expected request body: {
         "razorpay_order_id": "order_123",
         "razorpay_payment_id": "pay_123",
         "razorpay_signature": "signature_123",
@@ -1087,68 +1311,77 @@ def verify_payment(request):
         payment_id = data.get('razorpay_payment_id')
         signature = data.get('razorpay_signature')
         email = data.get('email')
-        
+        # Defensive logging for verification
+        print(f"[PAYMENT VERIFY] Incoming: order_id={order_id}, payment_id={payment_id}, signature={signature}, email={email}")
         if not all([order_id, payment_id, signature]):
+            print("[PAYMENT VERIFY] Missing payment details")
             return JsonResponse({
                 'verified': False,
                 'message': 'Missing payment details'
             }, status=400)
-        
-        # TODO: Verify signature using Razorpay SDK
-        # For now, assume signature is valid
-        
-        # Persistence: verify and update payment/order in DB (NEVER profile)
+        client = _get_razorpay_client()
         payment = PaymentModel.objects.filter(razorpay_order_id=order_id).first()
+        if not payment:
+            print(f"[PAYMENT VERIFY] Payment record not found for order_id={order_id}")
+            return JsonResponse({
+                'verified': False,
+                'message': 'Payment record not found'
+            }, status=400)
+        signature_payload = {
+            'razorpay_order_id': order_id,
+            'razorpay_payment_id': payment_id,
+            'razorpay_signature': signature,
+        }
+        try:
+            client.utility.verify_payment_signature(signature_payload)
+        except SignatureVerificationError:
+            print(f"[PAYMENT VERIFY] Invalid payment signature for order_id={order_id}, payment_id={payment_id}")
+            if payment:
+                payment.status = 'failed'
+                payment.razorpay_payment_id = payment_id or payment.razorpay_payment_id
+                payment.razorpay_signature = signature or payment.razorpay_signature
+                payment.save(update_fields=['status', 'razorpay_payment_id', 'razorpay_signature', 'updated_at'])
+            return JsonResponse({
+                'verified': False,
+                'message': 'Invalid payment signature'
+            }, status=400)
         if payment:
             payment.status = 'verified'
             payment.razorpay_payment_id = payment_id or payment.razorpay_payment_id
             payment.razorpay_signature = signature or payment.razorpay_signature
             payment.save(update_fields=['status', 'razorpay_payment_id', 'razorpay_signature', 'updated_at'])
-
+            resolved_email = email or payment.email
             if payment.order_id:
-                OrderModel.objects.filter(id=payment.order_id).update(status='paid', updated_at=datetime.now())
-                try:
-                    paid_order = OrderModel.objects.filter(id=payment.order_id).first()
-                    if email:
-                        notify_order_event(email, 'order_status_update', order=paid_order, status='paid')
-                except Exception as e:
-                    print(f"Order status notification failed for {email}: {e}")
-
-            # HARD BLOCK: Payment verification updates ONLY payment/order records, NEVER profile
-            # Profile data is immutable from payment/checkout flows (one-way: profile → checkout only)
-
-            # Persistence: update profile with latest stats when payment is verified (CRITICAL FIX)
-            # When order status changes to 'paid', ensure profile reflects the updated statistics
+                OrderModel.objects.filter(id=payment.order_id).update(status='paid', updated_at=timezone.now())
             try:
-                if email:
-                    stats = _compute_loyalty_stats(email)
-                    # CRITICAL: Save updated stats to database so data persists across refreshes
-                    UserProfile.objects.filter(email=email).update(
+                if resolved_email:
+                    stats = _compute_loyalty_stats(resolved_email)
+                    UserProfile.objects.filter(email=resolved_email).update(
                         total_orders=stats['totalOrders'],
                         total_spent=Decimal(str(stats['totalSpent'])),
                         loyalty_points=stats['loyaltyPoints'],
                         member_tier=stats['memberTier']
                     )
             except Exception as e:
-                print(f"Profile stats update failed for {email}: {e}")
-
-            # Persistence: log payment verification activity
+                print(f"Profile stats update failed for {resolved_email}: {e}")
             try:
-                _log_activity(email, 'payment_verified', {'razorpayOrderId': order_id})
+                if resolved_email:
+                    _log_activity(resolved_email, 'payment_verified', {'razorpayOrderId': order_id})
             except Exception as e:
-                print(f"Activity log failed for {email}: {e}")
-        
+                print(f"Activity log failed for {resolved_email}: {e}")
+        print(f"[PAYMENT VERIFY] Success for order_id={order_id}, payment_id={payment_id}")
         return JsonResponse({
             'verified': True,
             'message': 'Payment verified successfully'
         })
-        
     except json.JSONDecodeError:
+        print("[PAYMENT VERIFY] Invalid JSON")
         return JsonResponse({
             'verified': False,
             'message': 'Invalid JSON'
         }, status=400)
     except Exception as e:
+        print(f"[PAYMENT VERIFY] Exception: {e}")
         return JsonResponse({
             'verified': False,
             'message': str(e)
@@ -1197,11 +1430,7 @@ def process_payment(request):
         
         # Update order status (NEVER profile)
         if order_obj:
-            OrderModel.objects.filter(id=order_obj.id).update(status='processing', updated_at=datetime.now())
-            try:
-                notify_order_event(email, 'order_status_update', order=order_obj, status='processing')
-            except Exception as e:
-                print(f"Order status notification failed for {email}: {e}")
+            OrderModel.objects.filter(id=order_obj.id).update(status='processing', updated_at=timezone.now())
 
         # Persistence: update profile with latest stats after payment processing (CRITICAL FIX)
         # When payment is processed, ensure profile reflects updated order statistics
@@ -1273,11 +1502,12 @@ def get_orders(request):
             # Detect cancel request immediately, before any other logic
             order_id = data.get('orderId') or data.get('id')
             client_order_id = data.get('clientOrderId')
+            normalized_status = str(data.get('status') or '').strip().lower()
             cancel_request = (
                 (order_id or client_order_id)
                 and (
                     data.get('action') == 'cancel'
-                    or data.get('status') in ('cancelled', 'canceled', 'cancel')
+                    or normalized_status in ('cancelled', 'canceled', 'cancel')
                     or data.get('cancel') is True
                     or 'reason' in data
                 )
@@ -1315,56 +1545,12 @@ def get_orders(request):
                 order.status = 'cancelled'
                 order.save(update_fields=['status', 'updated_at'])
 
-                # Send cancellation email after successful status update; never break API flow on email failure.
+                # Send cancellation notification after successful status update.
+                # Use unified notification helper so all order mail follows one pipeline.
                 try:
-                    order_extra = order.extra_fields or {}
-                    if isinstance(order_extra, str):
-                        try:
-                            order_extra = json.loads(order_extra)
-                        except (json.JSONDecodeError, TypeError):
-                            order_extra = {}
-                    if not isinstance(order_extra, dict):
-                        order_extra = {}
-
-                    email_order_id = order_extra.get('clientOrderId') or str(order.id)
-                    user_name = (
-                        (request.user.get_full_name() or '').strip()
-                        or order_extra.get('customerName')
-                        or order.customer_name
-                        or 'Customer'
-                    )
-                    text_message = (
-                        f"Hello {user_name},\n\n"
-                        "Your order has been cancelled successfully.\n"
-                        f"Order ID: {email_order_id}\n"
-                        "Status: Cancelled\n\n"
-                        f"Thank you for choosing {BRAND_NAME}."
-                    )
-                    html_message = render_email_template(
-                        title='Order Cancelled',
-                        message=f"Hello {user_name}, your order has been cancelled successfully.",
-                        header_subtitle='Account Notification',
-                        meta_lines=[
-                            f"Order ID: {email_order_id}",
-                            "Status: Cancelled",
-                        ],
-                        footer_note=f'Thank you for choosing {BRAND_NAME}.',
-                    )
-
-                    email_msg = EmailMultiAlternatives(
-                        subject=f'Order Cancelled - {BRAND_NAME}',
-                        body=text_message,
-                        from_email=(
-                            f"{BRAND_NAME} <{(getattr(settings, 'DEFAULT_FROM_EMAIL', None) or getattr(settings, 'EMAIL_HOST_USER', None))}>"
-                            if (getattr(settings, 'DEFAULT_FROM_EMAIL', None) or getattr(settings, 'EMAIL_HOST_USER', None))
-                            else None
-                        ),
-                        to=[email],
-                    )
-                    email_msg.attach_alternative(html_message, "text/html")
-                    email_msg.send(fail_silently=False)
+                    notify_order_event(order.email or email, 'order_cancelled', order=order, status='cancelled')
                 except Exception as e:
-                    print(f"Order cancellation email failed for {email}: {e}")
+                    print(f"Order cancellation notification failed for {email}: {e}")
 
                 # Use clientOrderId if available, fallback to database id
                 order_extra = order.extra_fields or {}
@@ -1384,6 +1570,65 @@ def get_orders(request):
                     'status': order.status
                 })
 
+            status_update_request = (
+                (order_id or client_order_id)
+                and (
+                    data.get('action') in ('update_status', 'status_update')
+                    or normalized_status in ('pending', 'paid', 'confirmed', 'preparing', 'ready', 'delivered')
+                )
+            )
+            if status_update_request:
+                if not normalized_status:
+                    return JsonResponse({'success': False, 'message': 'Status is required'}, status=400)
+                if normalized_status in ('cancelled', 'canceled', 'cancel'):
+                    return JsonResponse({'success': False, 'message': 'Use cancel action for cancellation'}, status=400)
+
+                order = None
+                if order_id and str(order_id).isdigit():
+                    order = OrderModel.objects.filter(id=int(order_id), email=email).first()
+                if not order:
+                    resolved_client_order_id = client_order_id or (str(order_id) if order_id else None)
+                    order = _find_order_by_client_order_id(resolved_client_order_id, email=email)
+
+                if not order:
+                    return JsonResponse({'success': False, 'message': 'Order not found'}, status=404)
+
+                current_status = str(order.status or '').strip().lower()
+                if current_status in ('delivered', 'cancelled') and normalized_status != current_status:
+                    return JsonResponse({'success': False, 'message': f'Cannot update {current_status} order'}, status=400)
+
+                last_updated = timezone.now().isoformat()
+                extra = _normalize_extra_fields(order.extra_fields)
+                history = extra.get('trackingHistory')
+                if not isinstance(history, list):
+                    history = []
+
+                if current_status != normalized_status:
+                    if not history or str((history[-1] or {}).get('status') or '').strip().lower() != normalized_status:
+                        history.append({
+                            'status': normalized_status,
+                            'timestamp': last_updated,
+                        })
+                    extra['trackingHistory'] = history
+                    order.status = normalized_status
+                    order.extra_fields = extra
+                    order.save(update_fields=['status', 'extra_fields', 'updated_at'])
+                    if normalized_status == 'confirmed':
+                        try:
+                            notify_order_event(order.email or email, 'order_confirmed', order=order, status='confirmed')
+                        except Exception as e:
+                            print(f"Order confirmation notification failed for {email}: {e}")
+
+                display_order_id = str(extra.get('clientOrderId') or order.id)
+                return JsonResponse({
+                    'success': True,
+                    'message': 'Order status updated successfully',
+                    'orderId': display_order_id,
+                    'status': order.status,
+                    'lastUpdated': last_updated,
+                    'trackingHistory': history,
+                })
+
             if not order_id and not client_order_id:
                 return JsonResponse({'success': False, 'message': 'Order ID is required'}, status=400)
 
@@ -1396,7 +1641,7 @@ def get_orders(request):
         # Normalize fields for frontend
         orders_data = []
         for order in orders:
-            extra = order.extra_fields or {}
+            extra = _normalize_extra_fields(order.extra_fields)
             created_at_value = order.created_at.isoformat() if order.created_at else None
             updated_at_value = order.updated_at.isoformat() if order.updated_at else None
             total_amount = float(Decimal(str(order.total_amount or 0)))

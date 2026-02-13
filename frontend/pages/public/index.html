@@ -2574,7 +2574,44 @@
     <!-- Feedback Form Script -->
     <script>
         // Modal Functions
+        function isFeedbackUserAuthenticated() {
+            try {
+                const isLoggedIn = localStorage.getItem('isLoggedIn') === 'true';
+                const currentUser = localStorage.getItem('currentUser');
+                const userEmail = localStorage.getItem('userEmail');
+                return isLoggedIn && !!(currentUser || userEmail);
+            } catch (e) {
+                return false;
+            }
+        }
+
+        function triggerLoginRequiredFlow() {
+            closeFeedbackModal();
+
+            if (window.cartManager && typeof window.cartManager.showLoginRequiredModal === 'function') {
+                window.cartManager.showLoginRequiredModal();
+                return;
+            }
+
+            const modal = document.getElementById('loginRequiredModal');
+            const progressBar = document.getElementById('loginProgressBar');
+            if (!modal || !progressBar) return;
+
+            modal.style.display = 'block';
+            progressBar.style.width = '0%';
+            setTimeout(() => {
+                progressBar.style.width = '100%';
+            }, 100);
+            setTimeout(() => {
+                window.location.href = '/login/';
+            }, 3000);
+        }
+
         function openFeedbackModal() {
+            if (!isFeedbackUserAuthenticated()) {
+                triggerLoginRequiredFlow();
+                return;
+            }
             document.getElementById('feedbackModal').classList.add('active');
             document.body.style.overflow = 'hidden';
         }
@@ -2582,6 +2619,59 @@
         function closeFeedbackModal() {
             document.getElementById('feedbackModal').classList.remove('active');
             document.body.style.overflow = 'auto';
+        }
+
+        async function fetchTopFeedbacksFromDb() {
+            try {
+                const response = await fetch('/api/feedbacks/public/?min_rating=4&limit=3', {
+                    method: 'GET',
+                    credentials: 'same-origin'
+                });
+                if (!response.ok) return [];
+                const data = await response.json();
+                if (!data || !Array.isArray(data.feedbacks)) return [];
+                return data.feedbacks;
+            } catch (err) {
+                console.warn('Unable to fetch top feedbacks from DB:', err);
+                return [];
+            }
+        }
+
+        async function persistFeedbackToDb(formData) {
+            const payload = {
+                name: formData.name || 'Customer',
+                category: formData.category || 'Customer',
+                rating: formData.rating || 0,
+                message: formData.message || ''
+            };
+            const response = await fetch('/api/feedbacks/public/', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                credentials: 'same-origin',
+                body: JSON.stringify(payload)
+            });
+            if (response.status === 401) {
+                triggerLoginRequiredFlow();
+                throw new Error('Authentication required');
+            }
+            if (!response.ok) {
+                throw new Error(`Feedback save failed (HTTP ${response.status})`);
+            }
+            const data = await response.json();
+            if (!data || data.success !== true) {
+                throw new Error((data && data.message) || 'Feedback save failed');
+            }
+            return data.feedback || null;
+        }
+
+        function refreshFeedbackCardsFromDbOrLocal() {
+            fetchTopFeedbacksFromDb()
+                .then((dbFeedbacks) => {
+                    updateFeedbackCards(dbFeedbacks);
+                })
+                .catch(() => {
+                    updateFeedbackCards([]);
+                });
         }
 
         // Close modal when clicking outside
@@ -2691,8 +2781,13 @@
             }
 
             // Form Submission
-            document.getElementById('feedbackForm').addEventListener('submit', function(e) {
+            document.getElementById('feedbackForm').addEventListener('submit', async function(e) {
                 e.preventDefault();
+
+                if (!isFeedbackUserAuthenticated()) {
+                    triggerLoginRequiredFlow();
+                    return;
+                }
 
                 // Validate rating
                 if (!ratingValue.value) {
@@ -2715,24 +2810,14 @@
                     timestamp: new Date().toISOString()
                 };
 
-                // Store in localStorage
-                const storedFeedbacks = JSON.parse(localStorage.getItem('customerFeedbacks') || '[]');
-                let feedbacks = Array.isArray(storedFeedbacks)
-                    ? storedFeedbacks
-                    : (Array.isArray(storedFeedbacks?.feedbacks)
-                        ? storedFeedbacks.feedbacks
-                        : (Array.isArray(storedFeedbacks?.feedback) ? storedFeedbacks.feedback : []));
-                feedbacks.push(formData);
-                localStorage.setItem('customerFeedbacks', JSON.stringify(feedbacks));
-
-                // Re-fetch all feedback and re-render from latest filtered data
-                const refetched = JSON.parse(localStorage.getItem('customerFeedbacks') || '[]');
-                feedbacks = Array.isArray(refetched)
-                    ? refetched
-                    : (Array.isArray(refetched?.feedbacks)
-                        ? refetched.feedbacks
-                        : (Array.isArray(refetched?.feedback) ? refetched.feedback : []));
-                updateFeedbackCards(feedbacks);
+                try {
+                    await persistFeedbackToDb(formData);
+                    const dbFeedbacks = await fetchTopFeedbacksFromDb();
+                    updateFeedbackCards(dbFeedbacks);
+                } catch (err) {
+                    console.warn('Feedback DB persistence failed:', err);
+                    return;
+                }
 
                 // Show success message
                 document.getElementById('feedbackForm').style.display = 'none';
@@ -2757,7 +2842,7 @@
             document.getElementById('visitDate').setAttribute('max', today);
 
             // Initialize feedback cards on page load
-            updateFeedbackCards();
+            refreshFeedbackCardsFromDbOrLocal();
             handleFloatingButtonVisibility();
             
             // Add scroll listener for floating button
@@ -2775,21 +2860,17 @@
                 return [];
             };
 
-            const storedPrimary = JSON.parse(localStorage.getItem('customerFeedbacks') || '[]');
-            const storedLegacy = JSON.parse(localStorage.getItem('feedbacks') || '[]');
-            const sourceFeedbacks = Array.isArray(feedbackList)
-                ? feedbackList
-                : [...normalizeFeedbackArray(storedPrimary), ...normalizeFeedbackArray(storedLegacy)];
+            const sourceFeedbacks = normalizeFeedbackArray(feedbackList);
 
             const feedbacks = sourceFeedbacks
                 .filter(f => f && typeof f === 'object')
                 .map(f => ({
                     ...f,
-                    rating: f.rating ?? f.stars ?? f.overall_rating ?? f.score ?? 0,
-                    message: f.message ?? f.feedback ?? f.comment ?? '',
-                    name: f.name ?? f.user_name ?? f.username ?? f.customerName ?? 'Customer',
-                    category: f.category ?? f.type ?? f.feedbackCategory ?? 'Customer',
-                    timestamp: f.timestamp || f.created_at || f.createdAt || f.date || f.submitted_at || ''
+                    rating: Number(f.rating ?? f.stars ?? f.overall_rating ?? f.score ?? 0) || 0,
+                    message: String(f.message ?? f.feedback ?? f.comment ?? '').trim(),
+                    name: String(f.name ?? f.user_name ?? f.username ?? f.customerName ?? 'Customer').trim() || 'Customer',
+                    category: String(f.category ?? f.type ?? f.feedbackCategory ?? 'Customer').trim() || 'Customer',
+                    timestamp: String(f.timestamp || f.created_at || f.createdAt || f.date || f.submitted_at || '')
                 }));
 
             const filtered = feedbacks
@@ -2802,12 +2883,13 @@
                 .slice(0, 3);
 
             const container = document.getElementById('testimonialsContainer');
+            if (!container) return;
             const FEEDBACK_PREVIEW_LIMIT = 160;
             container.innerHTML = "";
 
             const cardsHtml = filtered.map(feedback => {
                 let starsHtml = '';
-                const rating = Number(feedback.rating);
+                const rating = Number(feedback.rating) || 0;
                 const fullRating = Math.floor(rating);
                 const hasHalf = rating % 1 !== 0;
 
@@ -2818,7 +2900,7 @@
                     starsHtml += '<i class="fas fa-star-half-alt"></i>';
                 }
 
-                const safeMessage = String(feedback.message || '');
+                const safeMessage = String(feedback.message || '').trim() || 'No feedback message provided.';
                 const fullText = `"${safeMessage}"`;
                 const previewText = fullText.length > FEEDBACK_PREVIEW_LIMIT
                     ? `${fullText.slice(0, FEEDBACK_PREVIEW_LIMIT).trimEnd()}...more`
@@ -2889,6 +2971,7 @@
 
         // Utility function to escape HTML
         function escapeHtml(text) {
+            const safeText = String(text ?? '');
             const map = {
                 '&': '&amp;',
                 '<': '&lt;',
@@ -2896,19 +2979,19 @@
                 '"': '&quot;',
                 "'": '&#039;'
             };
-            return text.replace(/[&<>"']/g, m => map[m]);
+            return safeText.replace(/[&<>"']/g, m => map[m]);
         }
 
         // Listen for storage changes from other tabs
         window.addEventListener('storage', function(e) {
             if (e.key === 'customerFeedbacks') {
-                updateFeedbackCards();
+                refreshFeedbackCardsFromDbOrLocal();
             }
         });
 
         // Listen for local profile updates
         window.addEventListener('feedbackUpdated', function() {
-            updateFeedbackCards();
+            refreshFeedbackCardsFromDbOrLocal();
         });
     </script>
     
@@ -2917,4 +3000,3 @@
 </html>
 
  
-

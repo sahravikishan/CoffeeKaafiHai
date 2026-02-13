@@ -140,6 +140,10 @@ def _load_dotenv():
 
 _load_dotenv()
 
+# Razorpay (server-side only; never expose secret to frontend)
+RAZORPAY_KEY_ID = os.environ.get('RAZORPAY_KEY_ID', '').strip()
+RAZORPAY_KEY_SECRET = os.environ.get('RAZORPAY_KEY_SECRET', '').strip()
+
 # Static files (CSS, JavaScript, Images)
 # https://docs.djangoproject.com/en/6.0/howto/static-files/
 

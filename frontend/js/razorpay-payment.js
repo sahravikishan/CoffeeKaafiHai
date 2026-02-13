@@ -13,12 +13,16 @@
 
 class RazorpayPaymentGateway {
     constructor() {
-        this.razorpayKey = 'rzp_test_1DP5mmOlF5G5ag'; // Test key - replace with live key in production
+        this.razorpayKey = '';
         this.apiEndpoint = '/api/payment'; // Backend API endpoint
         this.paymentInProgress = false;
         this.currentOrderData = null;
+        this.latestBackendOrder = null;
         this.retryCount = 0;
         this.maxRetries = 3;
+        this.checkoutCompletion = false;
+        this.isVerifyingPayment = false;
+        this.pendingFailureResponse = null;
         
         this.init();
     }
@@ -490,35 +494,43 @@ class RazorpayPaymentGateway {
      */
     async createOrder(orderData) {
         try {
-            // BACKEND INTEGRATION POINT
-            // Replace this with actual API call to your backend
-            /*
-            const response = await fetch(`${this.apiEndpoint}/create-order`, {
+            const response = await fetch(`${this.apiEndpoint}/create-order/`, {
                 method: 'POST',
                 headers: {
-                    'Content-Type': 'application/json',
-                    'Authorization': `Bearer ${localStorage.getItem('authToken')}`
+                    'Content-Type': 'application/json'
                 },
+                credentials: 'include',
                 body: JSON.stringify({
                     amount: orderData.amount,
                     currency: 'INR',
                     receipt: orderData.receipt,
-                    notes: orderData.notes
+                    email: orderData.email,
+                    items: orderData.items || [],
+                    clientOrderId: orderData.clientOrderId || '',
+                    orderType: orderData.orderType || '',
+                    deliveryAddress: orderData.deliveryAddress || '',
+                    paymentMethod: 'razorpay',
+                    paymentStatus: 'pending',
+                    subtotal: orderData.subtotal || 0,
+                    tax: orderData.tax || 0,
+                    name: orderData.customerName || '',
+                    phone: orderData.customerPhone || ''
                 })
             });
 
-            if (!response.ok) {
-                throw new Error('Failed to create order');
+            const data = await response.json();
+            if (!response.ok || !data.success || !data.razorpay_order_id) {
+                throw new Error(data.message || 'Failed to create Razorpay order');
             }
 
-            const data = await response.json();
-            return data.razorpay_order_id;
-            */
+            if (data.razorpay_key_id) {
+                this.razorpayKey = data.razorpay_key_id;
+            }
 
-            // DEMO: Generate mock order ID
-            return `order_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`;
+            this.latestBackendOrder = data.order || null;
+            return data;
         } catch (error) {
-            console.error('Create order error:', error);
+            this.logPaymentApiError('/create-order/', error);
             throw error;
         }
     }
@@ -529,38 +541,88 @@ class RazorpayPaymentGateway {
      */
     async verifyPayment(paymentData) {
         try {
-            // BACKEND INTEGRATION POINT
-            // Replace this with actual API call to your backend
-            /*
-            const response = await fetch(`${this.apiEndpoint}/verify-payment`, {
+            const response = await fetch(`${this.apiEndpoint}/verify-payment/`, {
                 method: 'POST',
                 headers: {
-                    'Content-Type': 'application/json',
-                    'Authorization': `Bearer ${localStorage.getItem('authToken')}`
+                    'Content-Type': 'application/json'
                 },
+                credentials: 'include',
                 body: JSON.stringify({
                     razorpay_order_id: paymentData.razorpay_order_id,
                     razorpay_payment_id: paymentData.razorpay_payment_id,
                     razorpay_signature: paymentData.razorpay_signature,
-                    email: localStorage.getItem('userEmail') || ''
+                    email: paymentData.email || localStorage.getItem('userEmail') || ''
                 })
             });
 
-            if (!response.ok) {
-                throw new Error('Payment verification failed');
-            }
-
             const data = await response.json();
-            return data.verified;
-            */
-
-            // DEMO: Mock verification (always returns true)
-            console.log('Payment verification data:', paymentData);
-            return true;
+            if (!response.ok || data.verified !== true) {
+                throw new Error(data.message || 'Payment verification failed');
+            }
+            return data;
         } catch (error) {
-            console.error('Verify payment error:', error);
+            this.logPaymentApiError('/verify-payment/', error);
             throw error;
         }
+    }
+
+    logPaymentApiError(endpoint, error) {
+        console.error(`[payment-api] ${endpoint}`, error);
+    }
+
+    getMethodConfig() {
+        // Enable UPI and all supported online modes
+        return {
+            card: true,
+            netbanking: true,
+            wallet: true,
+            upi: true
+        };
+    }
+
+    getDefaultEnabledMethod() {
+        const methodConfig = this.getMethodConfig();
+        const priority = ['card', 'netbanking', 'wallet', 'upi'];
+        return priority.find((method) => methodConfig[method]) || 'card';
+    }
+
+    setSelectedMethod(method) {
+        const cards = document.querySelectorAll('.razorpay-method-card');
+        cards.forEach((card) => card.classList.remove('selected'));
+        const next = document.querySelector(`.razorpay-method-card[data-method="${method}"]`);
+        if (next) next.classList.add('selected');
+        this.selectedPaymentMethod = method;
+    }
+
+    getSelectedMethodMap(method) {
+        const all = this.getMethodConfig();
+        if (!all[method]) {
+            return all;
+        }
+        return {
+            card: method === 'card',
+            netbanking: method === 'netbanking',
+            wallet: method === 'wallet',
+            upi: method === 'upi'
+        };
+    }
+
+    getRazorpayDisplayConfig(method) {
+        if (!method) return null;
+        return {
+            display: {
+                blocks: {
+                    preferred: {
+                        name: 'Selected Method',
+                        instruments: [{ method }]
+                    }
+                },
+                sequence: ['block.preferred'],
+                preferences: {
+                    show_default_blocks: false
+                }
+            }
+        };
     }
 
     /**
@@ -610,6 +672,7 @@ class RazorpayPaymentGateway {
         // Remove existing modal if any
         const existing = document.getElementById('razorpayPaymentOverlay');
         if (existing) existing.remove();
+        const defaultMethod = this.getDefaultEnabledMethod();
 
         const modalHTML = `
             <div id="razorpayPaymentOverlay" class="razorpay-payment-overlay active">
@@ -642,19 +705,19 @@ class RazorpayPaymentGateway {
                         <div class="razorpay-payment-methods">
                             <h3><i class="fas fa-wallet"></i> Payment Methods</h3>
                             <div class="razorpay-method-grid">
-                                <div class="razorpay-method-card selected" data-method="upi">
+                                <div class="razorpay-method-card${defaultMethod === 'upi' ? ' selected' : ''}" data-method="upi">
                                     <i class="fas fa-mobile-alt"></i>
                                     <span>UPI</span>
                                 </div>
-                                <div class="razorpay-method-card" data-method="card">
+                                <div class="razorpay-method-card${defaultMethod === 'card' ? ' selected' : ''}" data-method="card">
                                     <i class="fas fa-credit-card"></i>
                                     <span>Card</span>
                                 </div>
-                                <div class="razorpay-method-card" data-method="netbanking">
+                                <div class="razorpay-method-card${defaultMethod === 'netbanking' ? ' selected' : ''}" data-method="netbanking">
                                     <i class="fas fa-university"></i>
                                     <span>Net Banking</span>
                                 </div>
-                                <div class="razorpay-method-card" data-method="wallet">
+                                <div class="razorpay-method-card${defaultMethod === 'wallet' ? ' selected' : ''}" data-method="wallet">
                                     <i class="fas fa-wallet"></i>
                                     <span>Wallet</span>
                                 </div>
@@ -691,14 +754,22 @@ class RazorpayPaymentGateway {
      * Attach event listeners to payment modal
      */
     attachPaymentModalEvents(orderDetails) {
+        const methodConfig = this.getMethodConfig();
         // Method selection
         document.querySelectorAll('.razorpay-method-card').forEach(card => {
-            card.addEventListener('click', function() {
+            card.addEventListener('click', () => {
+                const selectedMethod = card.dataset.method;
+                if (!methodConfig[selectedMethod]) {
+                    this.showToast('This payment method is temporarily unavailable. Please use another method.', 'warning');
+                    return;
+                }
                 document.querySelectorAll('.razorpay-method-card').forEach(c => c.classList.remove('selected'));
-                this.classList.add('selected');
+                card.classList.add('selected');
+                this.selectedPaymentMethod = selectedMethod;
             });
         });
-
+        // Set initial selected method
+        this.selectedPaymentMethod = this.getDefaultEnabledMethod();
         // Pay button
         const payBtn = document.getElementById('razorpayPayBtn');
         if (payBtn) {
@@ -712,34 +783,65 @@ class RazorpayPaymentGateway {
     async processPayment(orderDetails) {
         const payBtn = document.getElementById('razorpayPayBtn');
         if (!payBtn) return;
-
         try {
-            // Disable button and show processing state
+            this.checkoutCompletion = false;
+            this.isVerifyingPayment = false;
+            this.pendingFailureResponse = null;
             payBtn.disabled = true;
             payBtn.classList.add('processing');
             payBtn.innerHTML = '<div class="razorpay-spinner"></div><span>Processing...</span>';
-
+            const methodConfig = this.getMethodConfig();
+            const fallbackMethod = this.getDefaultEnabledMethod();
+            const selectedMethod = this.selectedPaymentMethod || fallbackMethod;
+            const selectedMethodMap = this.getSelectedMethodMap(selectedMethod);
+            const razorpayDisplayConfig = this.getRazorpayDisplayConfig(selectedMethod);
+            if (!methodConfig[selectedMethod]) {
+                this.setSelectedMethod(fallbackMethod);
+                this.showPaymentStatus(
+                    'error',
+                    'Payment Method Unavailable',
+                    'Selected method is temporarily unavailable. Please continue with Card, Net Banking, or Wallet.'
+                );
+                this.showToast('An available method has been selected. Click Pay again to continue.', 'warning');
+                payBtn.disabled = false;
+                payBtn.classList.remove('processing');
+                payBtn.innerHTML = '<i class="fas fa-lock"></i><span>Pay Rs.' + orderDetails.amount + '</span>';
+                this.paymentInProgress = false;
+                this.checkoutCompletion = false;
+                this.isVerifyingPayment = false;
+                return;
+            }
             // Create order on backend
-            const razorpayOrderId = await this.createOrder({
-                amount: orderDetails.amount * 100, // Convert to paise
+            const backendOrder = await this.createOrder({
+                amount: orderDetails.amount,
                 currency: 'INR',
                 receipt: `receipt_${Date.now()}`,
-                notes: {
-                    orderId: orderDetails.orderId || '',
-                    customerName: orderDetails.customerName
-                }
+                email: orderDetails.customerEmail || localStorage.getItem('userEmail') || '',
+                items: orderDetails.items || [],
+                clientOrderId: orderDetails.orderId || '',
+                orderType: orderDetails.orderType || '',
+                deliveryAddress: orderDetails.deliveryAddress || '',
+                subtotal: orderDetails.subtotal || 0,
+                tax: orderDetails.tax || 0,
+                customerName: orderDetails.customerName || '',
+                customerPhone: orderDetails.customerPhone || ''
             });
-
             // Configure Razorpay options
             const options = {
-                key: this.razorpayKey,
-                amount: orderDetails.amount * 100,
-                currency: 'INR',
+                key: backendOrder.razorpay_key_id || this.razorpayKey,
+                amount: backendOrder.amount_paise || Math.round(Number(orderDetails.amount || 0) * 100),
+                currency: backendOrder.currency || 'INR',
                 name: 'CoffeeKaafiHai',
                 description: 'Coffee Order Payment',
-                image: '/images/Coffee.jpg',
-                order_id: razorpayOrderId,
-                handler: (response) => this.handlePaymentSuccess(response, orderDetails),
+                order_id: backendOrder.razorpay_order_id,
+                method: selectedMethodMap,
+                config: razorpayDisplayConfig,
+                handler: (response) => {
+                    this.checkoutCompletion = true;
+                    this.isVerifyingPayment = true;
+                    this.pendingFailureResponse = null;
+                    this.handlePaymentSuccess(response, orderDetails, backendOrder);
+                },
                 prefill: {
                     name: orderDetails.customerName,
                     email: orderDetails.customerEmail,
@@ -753,28 +855,34 @@ class RazorpayPaymentGateway {
                 },
                 modal: {
                     ondismiss: () => {
-                        this.handlePaymentDismiss();
+                        if (!this.checkoutCompletion && !this.isVerifyingPayment && this.pendingFailureResponse) {
+                            this.handlePaymentFailure(this.pendingFailureResponse, selectedMethod);
+                        } else if (!this.checkoutCompletion && !this.isVerifyingPayment) {
+                            this.handlePaymentDismiss();
+                        }
                         payBtn.disabled = false;
                         payBtn.classList.remove('processing');
                         payBtn.innerHTML = '<i class="fas fa-lock"></i><span>Pay ₹' + orderDetails.amount + '</span>';
                     }
                 }
             };
-
+            // Defensive log for payment method
+            console.log('[Razorpay] Opening checkout with method:', selectedMethod, options);
             // Open Razorpay checkout
             const rzp = new Razorpay(options);
-            
             rzp.on('payment.failed', (response) => {
-                this.handlePaymentFailure(response);
+                if (this.checkoutCompletion || this.isVerifyingPayment) {
+                    return;
+                }
+                this.pendingFailureResponse = response || null;
             });
-
             rzp.open();
-
         } catch (error) {
             console.error('Payment processing error:', error);
+            this.checkoutCompletion = false;
+            this.isVerifyingPayment = false;
+            this.pendingFailureResponse = null;
             this.showPaymentStatus('error', 'Payment Failed', error.message || 'An error occurred while processing your payment. Please try again.');
-            
-            // Reset button
             if (payBtn) {
                 payBtn.disabled = false;
                 payBtn.classList.remove('processing');
@@ -786,12 +894,19 @@ class RazorpayPaymentGateway {
     /**
      * Handle successful payment
      */
-    async handlePaymentSuccess(response, orderDetails) {
+    async handlePaymentSuccess(response, orderDetails, backendOrder = null) {
         try {
+            this.isVerifyingPayment = true;
             // Verify payment on backend
-            const verified = await this.verifyPayment(response);
+            const verifyResult = await this.verifyPayment({
+                ...response,
+                email: orderDetails.customerEmail || localStorage.getItem('userEmail') || ''
+            });
 
-            if (verified) {
+            if (verifyResult && verifyResult.verified === true) {
+                this.checkoutCompletion = true;
+                this.isVerifyingPayment = false;
+                this.pendingFailureResponse = null;
                 // Close payment modal
                 this.closePaymentModal();
 
@@ -812,6 +927,8 @@ class RazorpayPaymentGateway {
                     orderDetails.onSuccess({
                         ...response,
                         verified: true,
+                        backendOrderId: backendOrder?.backend_order_id || backendOrder?.order?.orderId || null,
+                        clientOrderId: backendOrder?.client_order_id || backendOrder?.order?.clientOrderId || orderDetails.orderId || null,
                         orderDetails: orderDetails
                     });
                 }
@@ -820,7 +937,16 @@ class RazorpayPaymentGateway {
             }
         } catch (error) {
             console.error('Payment success handler error:', error);
-            this.showPaymentStatus('error', 'Verification Failed', 'Payment was successful but verification failed. Please contact support.');
+            this.checkoutCompletion = true;
+            this.isVerifyingPayment = false;
+            this.pendingFailureResponse = null;
+            this.showPaymentStatus(
+                'error',
+                'Payment Confirmation Pending',
+                'Payment was captured but confirmation is delayed. Please check Order Tracking. Do not retry immediately.',
+                null,
+                { allowRetry: false }
+            );
         } finally {
             this.paymentInProgress = false;
         }
@@ -829,10 +955,18 @@ class RazorpayPaymentGateway {
     /**
      * Handle payment failure
      */
-    handlePaymentFailure(response) {
-        console.error('Payment failed:', response.error);
+    handlePaymentFailure(response, selectedMethod = '') {
+        if (this.checkoutCompletion || this.isVerifyingPayment) {
+            return;
+        }
+        this.pendingFailureResponse = null;
+        const errorData = response && response.error ? response.error : {};
+        console.error('Payment failed:', errorData);
         
-        const errorMessage = response.error.description || 'Payment failed. Please try again.';
+        let errorMessage = errorData.description || 'Payment failed. Please try again.';
+        if (selectedMethod && selectedMethod !== 'card' && /another method/i.test(errorMessage)) {
+            errorMessage = `${selectedMethod.toUpperCase()} may be unavailable in current Razorpay test mode/account settings. Try a Razorpay test card or enable this method in Razorpay dashboard.`;
+        }
         
         this.showPaymentStatus(
             'error',
@@ -842,7 +976,7 @@ class RazorpayPaymentGateway {
 
         // Trigger failure callback if provided
         if (this.currentOrderData && typeof this.currentOrderData.onFailure === 'function') {
-            this.currentOrderData.onFailure(response.error);
+            this.currentOrderData.onFailure(errorData);
         }
 
         this.paymentInProgress = false;
@@ -852,6 +986,10 @@ class RazorpayPaymentGateway {
      * Handle payment modal dismiss
      */
     handlePaymentDismiss() {
+        if (this.checkoutCompletion || this.isVerifyingPayment) {
+            return;
+        }
+        this.pendingFailureResponse = null;
         this.showToast('Payment cancelled', 'warning');
         this.paymentInProgress = false;
     }
@@ -872,13 +1010,14 @@ class RazorpayPaymentGateway {
     /**
      * Show payment status modal
      */
-    showPaymentStatus(type, title, message, data = null) {
+    showPaymentStatus(type, title, message, data = null, options = {}) {
         // Remove existing status modal
         const existing = document.getElementById('razorpayStatusModal');
         if (existing) existing.remove();
 
         const iconClass = type === 'success' ? 'fa-check-circle' : 'fa-times-circle';
         const iconColorClass = type === 'success' ? 'success' : 'error';
+        const allowRetry = options.allowRetry !== false;
 
         const statusHTML = `
             <div id="razorpayStatusModal" class="razorpay-status-modal active">
@@ -909,9 +1048,13 @@ class RazorpayPaymentGateway {
                             <button class="razorpay-status-btn primary" onclick="razorpayGateway.closeStatusModal(); window.location.href='/order-tracking/?orderId=${data?.orderId || ''}'">
                                 Track Order
                             </button>
-                        ` : `
+                        ` : allowRetry ? `
                             <button class="razorpay-status-btn primary" onclick="razorpayGateway.retryPayment()">
                                 Retry Payment
+                            </button>
+                        ` : `
+                            <button class="razorpay-status-btn primary" onclick="razorpayGateway.closeStatusModal()">
+                                OK
                             </button>
                         `}
                         <button class="razorpay-status-btn secondary" onclick="razorpayGateway.closeStatusModal()">

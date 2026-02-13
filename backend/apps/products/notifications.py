@@ -193,9 +193,14 @@ def notify_order_event(email, event, order=None, status=None):
             or getattr(order, 'orderId', None)
             or getattr(order, 'id', None)
         )
+    normalized_status = str(status or '').strip().lower()
+
     if event == 'order_placed':
         title = 'Order placed'
         message = f'Your order {order_id} has been placed. Status: {status or "pending"}.'
+    elif event in ('order_confirmed', 'order_approved') or (event == 'order_status_update' and normalized_status == 'confirmed'):
+        title = 'Order confirmed'
+        message = f'Your order {order_id} has been confirmed and will be prepared shortly.'
     elif event == 'order_cancelled':
         title = 'Order cancelled'
         message = f'Your order {order_id} has been cancelled.'

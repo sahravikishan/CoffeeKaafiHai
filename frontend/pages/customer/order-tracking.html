@@ -534,16 +534,19 @@
             <!-- Orders will be rendered here -->
         </div>
 
-            <div class="tracking-footer-actions">
-            <button class="btn-back" onclick="window.location.href='{% url 'home' %}'">
+        <div class="tracking-footer-actions">
+            <button type="button" class="btn-back" onclick="window.location.href='{% url 'home' %}'">
                 <i class="fas fa-arrow-left"></i>
                 Back to Home
             </button>
-            <button class="btn-back" onclick="window.location.href='{% url 'profile' %}'">
+            <button type="button" class="btn-back" onclick="window.location.href='{% url 'home' %}#menu'">
+                <i class="fas fa-utensils"></i>
+                Explore Menu
+            </button>
+            <button type="button" class="btn-back" onclick="window.location.href='{% url 'profile' %}'">
                 Go to Profile
                 <i class="fas fa-arrow-right"></i>
             </button>
-            </div>
         </div>
     </div>
 
@@ -822,11 +825,12 @@
                 updateETA(totalSteps - movementStep);
 
                 // Update order status based on progress
-                if (movementStep === 25) {
+                const currentStatus = String(order.status || '').toLowerCase();
+                if (movementStep === 25 && (currentStatus === 'pending' || currentStatus === 'paid')) {
                     updateOrderStatus(order, 'confirmed');
-                } else if (movementStep === 50) {
+                } else if (movementStep === 50 && currentStatus === 'confirmed') {
                     updateOrderStatus(order, 'preparing');
-                } else if (movementStep === 75) {
+                } else if (movementStep === 75 && currentStatus === 'preparing') {
                     updateOrderStatus(order, 'ready');
                 }
 
@@ -844,10 +848,47 @@
         }
 
         // Update order status
-        function updateOrderStatus(order, newStatus) {
-            if (ordersManager && typeof ordersManager.updateOrderStatus === 'function') {
-                ordersManager.updateOrderStatus(order.orderId, newStatus);
-                loadOrders(); // Refresh display
+        async function updateOrderStatus(order, newStatus) {
+            if (!ordersManager || typeof ordersManager.updateOrderStatus !== 'function') return;
+            const previous = String(order.status || '').toLowerCase();
+            const next = String(newStatus || '').toLowerCase();
+            if (!next || previous === next) return;
+
+            const ok = await ordersManager.updateOrderStatus(order.orderId, next);
+            if (!ok) return;
+
+            order.status = next;
+            order.lastUpdated = new Date().toISOString();
+            if (!Array.isArray(order.trackingHistory)) {
+                order.trackingHistory = [];
+            }
+            const latest = order.trackingHistory[order.trackingHistory.length - 1] || null;
+            const latestStatus = latest ? String(latest.status || '').toLowerCase() : '';
+            if (latestStatus !== next) {
+                order.trackingHistory.push({
+                    status: next,
+                    timestamp: order.lastUpdated
+                });
+            }
+
+            const card = document.querySelector(`.order-card[data-order-id="${order.orderId}"]`);
+            if (card) {
+                const statusBadge = card.querySelector('.order-status');
+                if (statusBadge) {
+                    statusBadge.style.background = ordersManager.getStatusColor(next);
+                    statusBadge.textContent = ordersManager.getStatusText(next);
+                }
+                const timeline = card.querySelector('.tracking-timeline');
+                if (timeline) {
+                    timeline.innerHTML = `
+                        <h4 style="margin-bottom: 20px;"><i class="fas fa-route"></i> Order Status Timeline</h4>
+                        ${renderTimeline(order)}
+                    `;
+                }
+            }
+
+            if (next === 'delivered' || next === 'cancelled') {
+                loadOrders();
             }
         }
 
@@ -971,7 +1012,10 @@
             } catch (e) { }
 
             const statuses = ['pending', 'confirmed', 'preparing', 'ready', 'delivered'];
-            const currentIndex = statuses.indexOf(order.status);
+            const normalizedStatus = String(order.status || '').toLowerCase() === 'paid'
+                ? 'confirmed'
+                : String(order.status || '').toLowerCase();
+            const currentIndex = statuses.indexOf(normalizedStatus);
 
             if (String(order.status).toLowerCase() === 'cancelled') {
                 return `
