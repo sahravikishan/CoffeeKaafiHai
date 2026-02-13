@@ -4,17 +4,17 @@ Backend decides whether to send based on stored user preferences.
 """
 
 import json
-from django.conf import settings
-from django.core.mail import EmailMultiAlternatives
+import logging
 from django.utils import timezone
 
 from database.models import User as MongoUser
 from .models import Notification, UserProfile
-from .email_templates import render_email_template, BRAND_NAME
+from .email_templates import send_templated_email
 
 
 DEFAULT_EMAIL_ENABLED = True
 DEFAULT_MOBILE_ENABLED = False
+logger = logging.getLogger(__name__)
 
 
 def _extract_pref(prefs, keys):
@@ -46,7 +46,11 @@ def _get_contact_info(email):
             'phone': profile.phone or '',
             'prefs': profile.coffee_preferences or {},
         }
-    mongo_user = MongoUser.find_by_email(email) or {}
+    try:
+        mongo_user = MongoUser.find_by_email(email) or {}
+    except Exception:
+        logger.exception("Mongo user lookup failed for notification email=%s", email)
+        mongo_user = {}
     return {
         'email': mongo_user.get('email') or email,
         'phone': mongo_user.get('phone') or '',
@@ -55,33 +59,15 @@ def _get_contact_info(email):
 
 
 def _send_email(subject, message, recipient, html=None):
-    if not recipient:
-        return False, 'missing_email'
-    try:
-        if html is None:
-            html = render_email_template(
-                title=subject,
-                message=message,
-                header_subtitle="Account Notification"
-            )
-        from_name = BRAND_NAME
-        from_email_value = (
-            getattr(settings, 'DEFAULT_FROM_EMAIL', None)
-            or getattr(settings, 'EMAIL_HOST_USER', None)
-        )
-        from_email = f"{from_name} <{from_email_value}>" if from_email_value else None
-        email = EmailMultiAlternatives(
-            subject=subject,
-            body=message,
-            from_email=from_email,
-            to=[recipient],
-        )
-        if html:
-            email.attach_alternative(html, "text/html")
-        email.send(fail_silently=False)
-        return True, None
-    except Exception as exc:
-        return False, str(exc)
+    return send_templated_email(
+        recipient=recipient,
+        subject=subject,
+        text_message=message,
+        title=subject,
+        message=message,
+        header_subtitle="Account Notification",
+        html_message=html,
+    )
 
 
 def _send_mobile(message, recipient_phone):
@@ -161,6 +147,14 @@ def dispatch_notification(
             email_record.status_reason = '' if ok else (reason or 'email_failed')
             email_record.sent_at = timezone.now() if ok else None
             email_record.save(update_fields=['status', 'status_reason', 'sent_at', 'updated_at'])
+            if not ok:
+                logger.error(
+                    "Notification email send failed email=%s event=%s category=%s reason=%s",
+                    email_record.email,
+                    event,
+                    category,
+                    email_record.status_reason,
+                )
 
         # Mobile delivery
         if mobile_record.status == 'queued':

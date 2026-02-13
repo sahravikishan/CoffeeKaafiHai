@@ -13,6 +13,7 @@ from django.db.models import Sum
 from django.contrib.auth.decorators import login_required, user_passes_test
 from django.utils import timezone
 import json
+import logging
 from datetime import datetime, timedelta
 import random
 from decimal import Decimal, ROUND_HALF_UP
@@ -21,8 +22,13 @@ from database.mongo import get_database
 from .models import Order as OrderModel, Payment as PaymentModel, UserProfile, UserActivity, Feedback, Notification
 from .forms import OrderForm
 from .notifications import notify_order_event, notify_offer, notify_announcement
-import bcrypt
+from .email_templates import send_templated_email
 import traceback
+
+try:
+    import bcrypt
+except Exception:
+    bcrypt = None
 
 try:
     import razorpay
@@ -30,6 +36,8 @@ try:
 except Exception:
     razorpay = None
     SignatureVerificationError = Exception
+
+logger = logging.getLogger(__name__)
 
 
 # ==========================================
@@ -197,8 +205,8 @@ def send_otp_email(request):
     """
     try:
         data = json.loads(request.body)
-        email = data.get('email')
-        otp = data.get('otp')
+        email = str(data.get('email') or '').strip().lower()
+        otp = str(data.get('otp') or '').strip()
         
         if not email or not otp:
             return JsonResponse({
@@ -208,10 +216,32 @@ def send_otp_email(request):
         
         # Save OTP to MongoDB
         OTP.create(email, otp, expiry_minutes=10)
-        
-        # TODO: Integrate with email service (SendGrid, AWS SES, Nodemailer, etc.)
-        # For now, just log it
-        print(f"OTP Email Request: Email={email}, OTP={otp}")
+
+        sent_at = timezone.localtime(timezone.now()).strftime('%a, %d/%m/%Y %I:%M %p')
+        ok, reason = send_templated_email(
+            recipient=email,
+            subject="Your Password Reset OTP",
+            text_message=f"Your OTP is {otp}. It expires in 10 minutes.",
+            title="Your OTP Code",
+            message="Use this one-time password to reset your account:",
+            code=otp,
+            meta_lines=[
+                "This OTP expires in 10 minutes.",
+                f"Sent at: {sent_at}",
+            ],
+            footer_note="If you didn't request this, you can safely ignore this email.",
+            header_subtitle="Secure Password Reset",
+        )
+        if not ok:
+            logger.error(
+                "Legacy OTP email send failed for email=%s reason=%s",
+                email,
+                reason or 'otp_email_send_failed',
+            )
+            return JsonResponse({
+                'success': False,
+                'message': 'Unable to send OTP email'
+            }, status=500)
         
         return JsonResponse({
             'success': True,
@@ -311,16 +341,21 @@ def login(request):
         try:
             if isinstance(stored_password, str) and stored_password.startswith('$2'):
                 # bcrypt hash stored
-                authenticated = bcrypt.checkpw(password.encode('utf-8'), stored_password.encode('utf-8'))
+                if bcrypt is None:
+                    authenticated = False
+                    logger.error("bcrypt dependency missing while verifying password for email=%s", email)
+                else:
+                    authenticated = bcrypt.checkpw(password.encode('utf-8'), stored_password.encode('utf-8'))
             else:
                 # Legacy plaintext fallback: compare and migrate to bcrypt on success
                 if stored_password == password:
                     authenticated = True
-                    try:
-                        new_hash = bcrypt.hashpw(password.encode('utf-8'), bcrypt.gensalt()).decode('utf-8')
-                        User.update(email, {'password': new_hash})
-                    except Exception as e:
-                        print(f"Password migration failed for {email}: {e}")
+                    if bcrypt is not None:
+                        try:
+                            new_hash = bcrypt.hashpw(password.encode('utf-8'), bcrypt.gensalt()).decode('utf-8')
+                            User.update(email, {'password': new_hash})
+                        except Exception as e:
+                            print(f"Password migration failed for {email}: {e}")
         except Exception as e:
             print(f"Error verifying password for {email}: {e}")
 
@@ -450,6 +485,15 @@ def signup(request):
             }, status=500)
 
         # Hash password with bcrypt before saving
+        if bcrypt is None:
+            if django_user:
+                try:
+                    django_user.delete()
+                except Exception:
+                    pass
+            return JsonResponse({
+                'message': 'Server security dependency is missing'
+            }, status=500)
         try:
             password_hash = bcrypt.hashpw(password.encode('utf-8'), bcrypt.gensalt()).decode('utf-8')
         except Exception as e:
@@ -573,7 +617,7 @@ def forgot_password(request):
     """
     try:
         data = json.loads(request.body)
-        email = data.get('email')
+        email = str(data.get('email') or '').strip().lower()
         
         if not email:
             return JsonResponse({
@@ -592,9 +636,29 @@ def forgot_password(request):
         
         # Save OTP to MongoDB with expiry (10 minutes)
         OTP.create(email, otp, expiry_minutes=10)
-        
-        # TODO: Send OTP email using email service
-        print(f"Password Reset OTP for {email}: {otp}")
+
+        sent_at = timezone.localtime(timezone.now()).strftime('%a, %d/%m/%Y %I:%M %p')
+        ok, reason = send_templated_email(
+            recipient=email,
+            subject="Your Password Reset OTP",
+            text_message=f"Your OTP is {otp}. It expires in 10 minutes.",
+            title="Your OTP Code",
+            message="Use this one-time password to reset your account:",
+            code=otp,
+            meta_lines=[
+                "This OTP expires in 10 minutes.",
+                f"Sent at: {sent_at}",
+            ],
+            footer_note="If you didn't request this, you can safely ignore this email.",
+            header_subtitle="Secure Password Reset",
+        )
+        if not ok:
+            logger.error(
+                "Forgot password OTP email send failed for email=%s reason=%s",
+                email,
+                reason or 'otp_email_send_failed',
+            )
+            return JsonResponse({'message': 'Unable to send OTP email'}, status=500)
         
         return JsonResponse({
             'message': 'OTP sent to your email'
@@ -640,6 +704,8 @@ def reset_password(request):
             }, status=400)
         
         # Check password strength (TODO) and hash with bcrypt
+        if bcrypt is None:
+            return JsonResponse({'message': 'Server security dependency is missing'}, status=500)
         try:
             password_hash = bcrypt.hashpw(newPassword.encode('utf-8'), bcrypt.gensalt()).decode('utf-8')
         except Exception as e:
@@ -1261,6 +1327,20 @@ def create_order(request):
             except Exception as e:
                 print(f"Activity log failed for {profile_email}: {e}")
 
+            try:
+                notify_order_event(
+                    profile_email,
+                    'order_placed',
+                    order=order,
+                    status=order.status or status or 'pending',
+                )
+            except Exception:
+                logger.exception(
+                    "Order placed notification failed for email=%s order_id=%s",
+                    profile_email,
+                    order.id,
+                )
+
         return JsonResponse({
             'success': True,
             'razorpay_order_id': razorpay_order_id,
@@ -1353,6 +1433,20 @@ def verify_payment(request):
             resolved_email = email or payment.email
             if payment.order_id:
                 OrderModel.objects.filter(id=payment.order_id).update(status='paid', updated_at=timezone.now())
+            try:
+                if resolved_email:
+                    notify_order_event(
+                        resolved_email,
+                        'order_status_update',
+                        order=payment.order if payment.order_id else None,
+                        status='paid',
+                    )
+            except Exception:
+                logger.exception(
+                    "Payment notification failed for email=%s razorpay_order_id=%s",
+                    resolved_email,
+                    order_id,
+                )
             try:
                 if resolved_email:
                     stats = _compute_loyalty_stats(resolved_email)
@@ -1549,8 +1643,12 @@ def get_orders(request):
                 # Use unified notification helper so all order mail follows one pipeline.
                 try:
                     notify_order_event(order.email or email, 'order_cancelled', order=order, status='cancelled')
-                except Exception as e:
-                    print(f"Order cancellation notification failed for {email}: {e}")
+                except Exception:
+                    logger.exception(
+                        "Order cancellation notification failed for email=%s order_id=%s",
+                        order.email or email,
+                        order.id,
+                    )
 
                 # Use clientOrderId if available, fallback to database id
                 order_extra = order.extra_fields or {}
@@ -1613,11 +1711,16 @@ def get_orders(request):
                     order.status = normalized_status
                     order.extra_fields = extra
                     order.save(update_fields=['status', 'extra_fields', 'updated_at'])
-                    if normalized_status == 'confirmed':
-                        try:
-                            notify_order_event(order.email or email, 'order_confirmed', order=order, status='confirmed')
-                        except Exception as e:
-                            print(f"Order confirmation notification failed for {email}: {e}")
+                    try:
+                        event_name = 'order_confirmed' if normalized_status == 'confirmed' else 'order_status_update'
+                        notify_order_event(order.email or email, event_name, order=order, status=normalized_status)
+                    except Exception:
+                        logger.exception(
+                            "Order status notification failed for email=%s order_id=%s status=%s",
+                            order.email or email,
+                            order.id,
+                            normalized_status,
+                        )
 
                 display_order_id = str(extra.get('clientOrderId') or order.id)
                 return JsonResponse({

@@ -1,24 +1,29 @@
 import json
 import random
+import logging
 from datetime import timedelta
 from zoneinfo import ZoneInfo
 
 from django.conf import settings
 from django.contrib.auth import get_user_model
-from django.core.mail import EmailMultiAlternatives
 from django.http import JsonResponse
 from django.utils import timezone
 from django.views.decorators.csrf import csrf_exempt
 from django.views.decorators.http import require_http_methods
 
 from .models import PasswordResetOTP
-from .email_templates import render_email_template, BRAND_NAME
+from .email_templates import send_templated_email
 from database.models import User as MongoUser
-import bcrypt
+
+try:
+    import bcrypt
+except Exception:
+    bcrypt = None
 
 
 OTP_EXPIRY_MINUTES = getattr(settings, 'PASSWORD_RESET_OTP_EXPIRY_MINUTES', 5)
 OTP_MAX_ATTEMPTS = getattr(settings, 'PASSWORD_RESET_OTP_MAX_ATTEMPTS', 5)
+logger = logging.getLogger(__name__)
 
 
 def _normalize_email(email):
@@ -49,12 +54,6 @@ def _create_otp_record(user, email):
 
 def _send_otp_email(email, otp):
     subject = "Your Password Reset OTP"
-    from_name = BRAND_NAME
-    from_email_value = (
-        getattr(settings, 'DEFAULT_FROM_EMAIL', None)
-        or getattr(settings, 'EMAIL_HOST_USER', None)
-    )
-    from_email = f"{from_name} <{from_email_value}>" if from_email_value else None
 
     text_message = (
         f"Your OTP is {otp}. It expires in {OTP_EXPIRY_MINUTES} minutes."
@@ -64,7 +63,10 @@ def _send_otp_email(email, otp):
         timezone=ZoneInfo('Asia/Kolkata')
     ).strftime('%a, %d/%m/%Y %I:%M %p')
 
-    html_message = render_email_template(
+    ok, reason = send_templated_email(
+        recipient=email,
+        subject=subject,
+        text_message=text_message,
         title="Your OTP Code",
         message="Use this one-time password to reset your account:",
         code=otp,
@@ -73,12 +75,10 @@ def _send_otp_email(email, otp):
             f"Sent at: {sent_at}"
         ],
         footer_note="If you didn't request this, you can safely ignore this email.",
-        header_subtitle="Secure Password Reset"
+        header_subtitle="Secure Password Reset",
     )
-
-    msg = EmailMultiAlternatives(subject, text_message, from_email, [email])
-    msg.attach_alternative(html_message, "text/html")
-    msg.send(fail_silently=False)
+    if not ok:
+        raise RuntimeError(reason or "otp_email_send_failed")
 
 
 def _get_latest_active_otp(email):
@@ -144,9 +144,8 @@ def forgot_password(request):
         try:
             # Send OTP to user's email using configured Gmail SMTP.
             _send_otp_email(email, otp)
-        except Exception as e:
-            # Log SMTP error to server console for debugging.
-            print(f"Password reset OTP email failed for {email}: {e}")
+        except Exception:
+            logger.exception("Password reset OTP email failed for email=%s", email)
             return JsonResponse({'message': 'Unable to send OTP email'}, status=500)
 
         return JsonResponse({'message': 'OTP sent to your email'})
@@ -227,10 +226,13 @@ def reset_password(request):
 
         # Keep Mongo user in sync for existing auth flow.
         try:
-            password_hash = bcrypt.hashpw(new_password.encode('utf-8'), bcrypt.gensalt()).decode('utf-8')
-            MongoUser.update(email, {'password': password_hash})
-        except Exception as e:
-            print(f"Mongo password sync failed for {email}: {e}")
+            if bcrypt is None:
+                logger.error("bcrypt dependency missing; skipping Mongo password sync for email=%s", email)
+            else:
+                password_hash = bcrypt.hashpw(new_password.encode('utf-8'), bcrypt.gensalt()).decode('utf-8')
+                MongoUser.update(email, {'password': password_hash})
+        except Exception:
+            logger.exception("Mongo password sync failed for email=%s", email)
 
         # Delete OTP record after successful reset.
         record.delete()
